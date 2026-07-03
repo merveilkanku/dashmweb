@@ -1,0 +1,28 @@
+124:      console.log("📩 [AuthScreen] Message reçu de la popup:", event.origin, event.data?.type);
+125-      
+126-      // Origin check - be more lenient in development/preview environments
+--
+140:        console.log("✅ [AuthScreen] OAuth Success message received, setting session...");
+141-        setLoading(true);
+142-        supabase.auth.setSession({
+--
+207:      console.log("📱 [Auth] Environnement:", isNative ? "NATIVE/APK" : "WEB");
+208:      console.log("🔗 [Auth] URL de retour (redirectTo):", redirectTo);
+209-      
+210-      const { data, error } = await supabase.auth.signInWithOAuth({
+--
+229:            console.log("🌍 [Auth] Ouverture du navigateur système pour login...");
+230-            window.open(data.url, '_system');
+231-            
+--
+294:    console.log(`🚀 [Auth] Tentative de ${isLogin ? 'Connexion' : 'Inscription'} pour: ${email}`);
+295-    setLoading(true);
+296-    setError(null);
+--
+319:        console.log("✅ [Auth] signInWithPassword réussi");
+320-      } else {
+321-        // SIGN UP
+--
+349:            console.log("🔗 Profil pré-existant trouvé par e-mail, préservation du rôle s'il est spécifique, sinon utilisation du nouveau rôle :", preExistingProfileByEmail.role);
+350-            roleToAssign = (preExistingProfileByEmail.role && preExistingProfileByEmail.role !== 'client') 
+351-              ? preExistingProfileByEmail.role 

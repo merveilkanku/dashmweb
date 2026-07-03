@@ -1,0 +1,115 @@
+111:        console.log("🔍 [Auth] Analyse URL pour jeton...");
+112-        
+113-        // Extraction manuelle robuste (le hash n'est pas toujours géré par URLSearchParams nativement après un redirect)
+--
+128:            console.log("⏭️ [Auth] Jeton d'accès déjà traité lors d'une session précédente. Ignoré de façon préventive.");
+129-            return;
+130-          }
+--
+132:          console.log("🔑 [Auth] Jeton trouvé. Synchronisation Supabase...");
+133-          const { data, error } = await supabase.auth.setSession({
+134-            access_token: accessToken,
+--
+144:            console.log('✅ [Auth] Session activée via URL');
+145-            // Enregistrer le token traité avec succès pour éviter que le reboot ne le traite de nouveau
+146-            localStorage.setItem('dashmeals_last_auth_token', accessToken);
+--
+151:              console.log("📤 [Auth] Envoi du signal de succès à la fenêtre parente...");
+152-              window.opener.postMessage({ 
+153-                type: 'OAUTH_SUCCESS', 
+--
+188:          console.log('🔗 [App] Deep link reçu :', data.url);
+189-          handleUrlAuth(data.url);
+190-        }).then(listener => {
+--
+324:      console.log("🚀 [Auth] Début initSession");
+325-      setIsAppInitializing(true);
+326-
+--
+371:                  console.log("📂 [Auth] Session récupérée manuellement depuis le stockage local !");
+372-                  session = parsed;
+373-                }
+--
+382:          console.log("✅ [Auth] Session active trouvée:", session.user.email);
+383-          
+384-          // EFFICIENT FAST PROVISIONAL LOGIN TO PREVENT BLOCKING LOADER SCREENS!
+--
+420:            console.log("⚡ [Auth] Fast provisional user loaded instantly on init:", provisionalUser.name, "(Role:", provisionalUser.role, ")");
+421-            setCurrentUser(provisionalUser);
+422-            currentUserRef.current = provisionalUser;
+--
+437:            console.log("📂 [Auth] Session locale (staff) trouvée");
+438-            const user = JSON.parse(staffSession);
+439-            if (!currentUserRef.current) {
+--
+445:            console.log("👤 [Auth] Pas de session active.");
+446-            setShowAuth(true);
+447-            setIsAppInitializing(false);
+--
+464:      console.log(`🔔 [Auth] Event: ${event}`);
+465-      
+466-      if (event === 'SIGNED_IN') {
+--
+468:          console.log(`📡 [Auth] ${event} pour ${session.user.email}`);
+469-          
+470-          // EFFICIENT FAST PROVISIONAL LOGIN TO PREVENT BLOCKING LOADER SCREENS!
+--
+504:            console.log("⚡ [Auth] Fast provisional user loaded instantly on event:", provisionalUser.name, "(Role:", provisionalUser.role, ")");
+505-            setCurrentUser(provisionalUser);
+506-            currentUserRef.current = provisionalUser;
+--
+530:              console.log('👋 [Auth] SIGNED_OUT confirmé, déconnexion.');
+531-              setCurrentUser(null);
+532-              lastFetchedUserId.current = null;
+--
+537:            console.log('📡 [Auth] Faux SIGNED_OUT ignoré — session active trouvée.');
+538-          }
+539-        } catch (e) {
+--
+558:        console.log("⏳ [Auth] fetchUserProfile déjà en cours pour cet utilisateur, on ignore l'appel doublon");
+559-        return;
+560-    }
+--
+621:      console.log(`📡 [Auth] fetchUserProfile pour: ${email}`);
+622-      setIsSupabaseReachable(true); 
+623-      
+--
+626:          console.log("👑 [Auth] IDENTIFIÉ COMME SUPER ADMIN");
+627-          const superAdmin: User = {
+628-              id: userId,
+--
+687:        console.log("🆕 [Auth] Profil introuvable, vérification d'un profil pré-existant par e-mail...");
+688-        
+689-        let preExistingProfileByEmail = null;
+--
+708:          console.log("🔗 Profil pré-existant trouvé par e-mail, migration en cours de l'ID temporaire vers l'ID utilisateur réel...");
+709-          try {
+710-            await supabase.from('profiles').delete().eq('id', preExistingProfileByEmail.id);
+--
+764:            console.log(
+765-              `🛡️ [Auth] Role guard: DB returned '${computedRole}' but keeping '${currentUserRef.current.role}' from provisional user`
+766-            );
+--
+896:      console.log(`📡 [Restaurants] Début chargement...`);
+897-      let data: any[] | null = null;
+898-      let error: any = null;
+--
+980:        console.log("ℹ️ Aucun restaurant trouvé en base.");
+981-        // Si on n'a pas encore fini l'init ou si on est un vrai utilisateur, on ne montre pas de mocks
+982-        if (isAppInitializing || (currentUser && currentUser.role !== 'guest')) {
+--
+1008:            console.log("Changement majeur détecté dans les restaurants, rechargement...");
+1009-            fetchRestaurants();
+1010-          } else if (payload.eventType === 'UPDATE') {
+--
+1130:    console.log("👋 [Auth] Initiating instantaneous non-blocking logout...");
+1131-    
+1132-    // 1. Clear all local application sessions
+--
+1179:      console.log("🛡️ [Auth] Désactivation et réinitialisation du code PIN dans Supabase...");
+1180-      try {
+1181-        await supabase
+--
+1185:        console.log("✅ [Auth] Code PIN réinitialisé en base avec succès !");
+1186-      } catch (err) {
+1187-        console.error("❌ [Auth] Erreur lors de la réinitialisation du code PIN :", err);

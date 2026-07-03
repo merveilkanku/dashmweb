@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DashMeals RDC</title>
+    
+    <script>
+      // Diagnostic global des erreurs du moteur Webview/JS (extrêmement utile pour APK)
+      (function() {
+        window.__app_errors = [];
+        
+        function showErrorOverlay(errText) {
+          if (document.getElementById('startup-error-overlay')) {
+            return;
+          }
+          
+          var overlay = document.createElement('div');
+          overlay.id = 'startup-error-overlay';
+          overlay.style.position = 'fixed';
+          overlay.style.inset = '0';
+          overlay.style.zIndex = '999999';
+          overlay.style.backgroundColor = '#0f172a';
+          overlay.style.color = '#f1f5f9';
+          overlay.style.padding = '24px';
+          overlay.style.fontFamily = 'system-ui, -apple-system, sans-serif';
+          overlay.style.overflowY = 'auto';
+          overlay.style.display = 'flex';
+          overlay.style.flexDirection = 'column';
+          overlay.style.alignItems = 'center';
+          overlay.style.justifyContent = 'center';
+          overlay.style.boxSizing = 'border-box';
+
+          var container = document.createElement('div');
+          container.style.maxWidth = '500px';
+          container.style.width = '100%';
+          container.style.backgroundColor = '#1e293b';
+          container.style.padding = '24px';
+          container.style.borderRadius = '16px';
+          container.style.boxShadow = '0 10px 25px -5px rgba(0, 0, 0, 0.4)';
+          container.style.border = '1px solid #475569';
+          container.style.textAlign = 'center';
+
+          var title = document.createElement('h2');
+          title.innerText = '⚠️ Analyse du Démarrage (Diagnostic)';
+          title.style.fontSize = '18px';
+          title.style.fontWeight = '800';
+          title.style.color = '#ef4444';
+          title.style.margin = '0 0 12px 0';
+          
+          var subtitle = document.createElement('p');
+          subtitle.innerText = "L'application s'est arrêtée ou a rencontré un problème lors de l'initialisation. Détails techniques :";
+          subtitle.style.fontSize = '13px';
+          subtitle.style.color = '#94a3b8';
+          subtitle.style.margin = '0 0 16px 0';
+          subtitle.style.lineHeight = '1.4';
+
+          var errorBox = document.createElement('pre');
+          errorBox.innerText = errText;
+          errorBox.style.textAlign = 'left';
+          errorBox.style.backgroundColor = '#020617';
+          errorBox.style.color = '#ef4444';
+          errorBox.style.padding = '12px';
+          errorBox.style.borderRadius = '8px';
+          errorBox.style.fontSize = '11px';
+          errorBox.style.fontFamily = 'monospace';
+          errorBox.style.overflowX = 'auto';
+          errorBox.style.margin = '0 0 20px 0';
+          errorBox.style.whiteSpace = 'pre-wrap';
+          errorBox.style.border = '1px solid #ef444422';
+
+          var btnRow = document.createElement('div');
+          btnRow.style.display = 'flex';
+          btnRow.style.gap = '12px';
+          btnRow.style.justifyContent = 'center';
+
+          var reloadBtn = document.createElement('button');
+          reloadBtn.innerText = 'Recharger / Réessayer';
+          reloadBtn.style.backgroundColor = '#2563eb';
+          reloadBtn.style.color = '#ffffff';
+          reloadBtn.style.border = 'none';
+          reloadBtn.style.padding = '10px 16px';
+          reloadBtn.style.borderRadius = '8px';
+          reloadBtn.style.fontSize = '13px';
+          reloadBtn.style.fontWeight = '600';
+          reloadBtn.style.cursor = 'pointer';
+          reloadBtn.onclick = function() {
+            window.location.reload();
+          };
+
+          var ignoreBtn = document.createElement('button');
+          ignoreBtn.innerText = 'Ignorer';
+          ignoreBtn.style.backgroundColor = 'transparent';
+          ignoreBtn.style.color = '#94a3b8';
+          ignoreBtn.style.border = '1px solid #475569';
+          ignoreBtn.style.padding = '10px 16px';
+          ignoreBtn.style.borderRadius = '8px';
+          ignoreBtn.style.fontSize = '13px';
+          ignoreBtn.style.fontWeight = '600';
+          ignoreBtn.style.cursor = 'pointer';
+          ignoreBtn.onclick = function() {
+            overlay.remove();
+          };
+
+          btnRow.appendChild(reloadBtn);
+          btnRow.appendChild(ignoreBtn);
+
+          container.appendChild(title);
+          container.appendChild(subtitle);
+          container.appendChild(errorBox);
+          container.appendChild(btnRow);
+          overlay.appendChild(container);
+
+          if (document.body) {
+            document.body.appendChild(overlay);
+          } else {
+            document.documentElement.appendChild(overlay);
+          }
+        }
+
+        window.addEventListener('error', function(e) {
+          // Ignorer les erreurs d'extension ou d'analytics mineures non critiques
+          if (e.message && (e.message.includes('ResizeObserver') || e.message.includes('GoogleAnalytics'))) return;
+          var errStr = e.message + '\nSource : ' + (e.filename || 'bundle.js').split('/').pop() + ':' + e.lineno + ':' + e.colno;
+          window.__app_errors.push(errStr);
+          showErrorOverlay(errStr);
+        });
+
+        window.addEventListener('unhandledrejection', function(e) {
+          var reason = e.reason;
+          if (!reason) return;
+          if (reason.message && reason.message.includes('ResizeObserver')) return;
+          var errStr = 'Unhandled Rejection : ' + (reason.message || reason);
+          window.__app_errors.push(errStr);
+          showErrorOverlay(errStr);
+        });
+
+        // Détection de l'écran blanc silencieux dû au blocage ES Modules
+        setTimeout(function() {
+          var root = document.getElementById('root');
+          if (root && root.children.length === 0 && window.__app_errors.length === 0) {
+            showErrorOverlay(
+              "Initialisation bloquée (timeout 5s).\n\n" +
+              "Raisons courantes :\n" +
+              "1. Votre WebView Android System n'est pas à jour côté Play Store.\n" +
+              "2. Des fichiers JavaScript (ES Modules) ne parviennent pas à se charger sous l'adresse locale (capacitor://localhost).\n" +
+              "3. Des cookies ou permissions de stockage local (localStorage) sont désactivés ou corrompus sur l'appareil."
+            );
+          }
+        }, 5000);
+      })();
+    </script>
+
+    <!-- LEAFLET CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+    
+    <!-- GOOGLE FONTS -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;900&family=Lato:wght@300;400;700;900&family=Montserrat:wght@300;400;500;600;700;900&family=Open+Sans:wght@300;400;500;600;700;800&family=Roboto:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+
+    <style>
+      /* GLOBAL SHARPNESS FIXES */
+      body {
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        text-rendering: optimizeLegibility;
+      }
+      
+      /* Fix pour les images générales, mais exclusion de la carte */
+      img {
+        image-rendering: -webkit-optimize-contrast;
+      }
+      
+      /* LEAFLET SPECIFIC FIXES */
+      .leaflet-container img.leaflet-tile {
+        image-rendering: auto !important; 
+        mix-blend-mode: normal !important;
+      }
+      
+      /* Force le moteur de rendu GPU pour éviter le flou de sous-pixel */
+      #root {
+        isolation: isolate;
+      }
+      
+      /* Leaflet Z-Index fix for modals */
+      .leaflet-pane {
+        z-index: 10 !important;
+      }
+      .leaflet-bottom, .leaflet-top {
+        z-index: 20 !important;
+      }
+    </style>
+    <link rel="stylesheet" href="./index.css">
+</head>
+  <body class="bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white transition-colors duration-300">
+    <div id="root"></div>
+    <script type="module" src="./index.tsx"></script>
+  </body>
+</html>
