@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { MapContainer, TileLayer, Marker, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import { MapPin, Crosshair, Loader, AlertCircle, Navigation } from 'lucide-react';
@@ -49,6 +49,34 @@ const CITY_COORDINATES: Record<string, [number, number]> = {
   'Beni': [0.5, 29.4667]
 };
 
+const getDistanceInKm = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+  const R = 6371; // Radius of the earth in km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+    Math.sin(dLon/2) * Math.sin(dLon/2)
+    ; 
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); 
+  const d = R * c; // Distance in km
+  return d;
+};
+
+const getNearestCity = (lat: number, lng: number): string => {
+  let nearestCity = 'Lubumbashi';
+  let minDistance = Infinity;
+  
+  for (const [cityName, coords] of Object.entries(CITY_COORDINATES)) {
+    const dist = getDistanceInKm(lat, lng, coords[0], coords[1]);
+    if (dist < minDistance) {
+      minDistance = dist;
+      nearestCity = cityName;
+    }
+  }
+  return nearestCity;
+};
+
 const fetchAddress = async (lat: number, lng: number): Promise<{ address: string; city: string; country: string }> => {
   try {
     const res = await fetch(
@@ -57,11 +85,23 @@ const fetchAddress = async (lat: number, lng: number): Promise<{ address: string
     if (!res.ok) throw new Error("Erreur de géocodage");
     const data = await res.json();
     
-    const city = data.address?.city || 
-                 data.address?.town || 
-                 data.address?.village || 
-                 data.address?.state ||
-                 (lat > -12 && lat < -11 && lng > 27 && lng < 28 ? 'Lubumbashi' : 'Position inconnue');
+    let city = data.address?.city || 
+               data.address?.town || 
+               data.address?.village || 
+               data.address?.state;
+    
+    if (city) {
+      const matchedCity = Object.keys(CITY_COORDINATES).find(
+        c => c.toLowerCase().trim() === city.toLowerCase().trim()
+      );
+      if (matchedCity) {
+        city = matchedCity;
+      } else {
+        city = getNearestCity(lat, lng);
+      }
+    } else {
+      city = getNearestCity(lat, lng);
+    }
     
     const country = data.address?.country || 'République Démocratique du Congo';
     const displayName = data.display_name || `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
@@ -75,7 +115,7 @@ const fetchAddress = async (lat: number, lng: number): Promise<{ address: string
     console.error("Reverse geocoding failed", error);
     return {
       address: `${lat.toFixed(4)}, ${lng.toFixed(4)}`,
-      city: lat > -12 && lat < -11 && lng > 27 && lng < 28 ? 'Lubumbashi' : 'Position inconnue',
+      city: getNearestCity(lat, lng),
       country: 'RDC'
     };
   }
@@ -83,21 +123,14 @@ const fetchAddress = async (lat: number, lng: number): Promise<{ address: string
 
 const LocationMarker = ({ 
   position, 
-  setPosition, 
-  onLocationSelect 
+  onPositionChange
 }: { 
   position: Location | null; 
-  setPosition: (pos: Location) => void; 
-  onLocationSelect: (pos: Location) => void;
+  onPositionChange: (lat: number, lng: number) => void;
 }) => {
   const map = useMapEvents({
-    async click(e) {
-      const newPos = { lat: e.latlng.lat, lng: e.latlng.lng };
-      const { address, city, country } = await fetchAddress(newPos.lat, newPos.lng);
-      const locationData = { ...newPos, address, city, country };
-      setPosition(locationData);
-      onLocationSelect(locationData);
-      toast.success(`📍 ${city} sélectionné`);
+    click(e) {
+      onPositionChange(e.latlng.lat, e.latlng.lng);
     },
   });
 
@@ -105,10 +138,30 @@ const LocationMarker = ({
     if (position) {
       map.flyTo([position.lat, position.lng], map.getZoom());
     }
-  }, [position, map]);
+  }, [position?.lat, position?.lng, map]);
+
+  const markerRef = useRef<any>(null);
+
+  const eventHandlers = useMemo(
+    () => ({
+      dragend() {
+        const marker = markerRef.current;
+        if (marker != null) {
+          const latLng = marker.getLatLng();
+          onPositionChange(latLng.lat, latLng.lng);
+        }
+      },
+    }),
+    [onPositionChange],
+  );
 
   return position === null ? null : (
-    <Marker position={[position.lat, position.lng]} />
+    <Marker 
+      draggable={true}
+      eventHandlers={eventHandlers}
+      position={[position.lat, position.lng]} 
+      ref={markerRef}
+    />
   );
 };
 
@@ -123,6 +176,10 @@ export const LocationPicker: React.FC<Props> = ({
   const [error, setError] = useState<string | null>(null);
   const [mapCenter, setMapCenter] = useState<[number, number]>(defaultCenter);
   const [locationStatus, setLocationStatus] = useState<string>('');
+  
+  // Saisie manuelle des coordonnées
+  const [manualLat, setManualLat] = useState<string>(initialLocation?.lat.toString() || defaultCenter[0].toString());
+  const [manualLng, setManualLng] = useState<string>(initialLocation?.lng.toString() || defaultCenter[1].toString());
 
   // Sélectionner Lubumbashi par défaut
   const selectLubumbashi = () => {
@@ -136,10 +193,24 @@ export const LocationPicker: React.FC<Props> = ({
     
     setPosition(lubumbashiLocation);
     setMapCenter(LUBUMBASHI_COORDS);
+    setManualLat(LUBUMBASHI_COORDS[0].toString());
+    setManualLng(LUBUMBASHI_COORDS[1].toString());
     setLocationStatus("📍 Lubumbashi sélectionné");
     onLocationSelect(lubumbashiLocation);
     toast.success("📍 Lubumbashi sélectionné comme position");
     setError(null);
+  };
+
+  const applyPosition = async (lat: number, lng: number) => {
+    setManualLat(lat.toString());
+    setManualLng(lng.toString());
+    const { address, city, country } = await fetchAddress(lat, lng);
+    const locationData = { lat, lng, address, city, country };
+    setPosition(locationData);
+    setMapCenter([lat, lng]);
+    onLocationSelect(locationData);
+    setLocationStatus(`📍 Position définie : ${city || `${lat.toFixed(4)}, ${lng.toFixed(4)}`}`);
+    toast.success(`📍 Position définie : ${city || 'Position personnalisée'}`);
   };
 
   // Fonction pour détecter la position GPS avec gestion d'erreur améliorée
@@ -157,21 +228,11 @@ export const LocationPicker: React.FC<Props> = ({
       return;
     }
     
-    // Vérifier si c'est un mobile (avec GPS réel)
-    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-    
-    if (!isMobile) {
-      toast.info("💡 Sur ordinateur, la position par IP peut être imprécise. Cliquez directement sur la carte pour sélectionner Lubumbashi.");
-      setLocationStatus("💡 Sur ordinateur, utilisez la carte pour sélectionner Lubumbashi");
-      setIsLocating(false);
-      return;
-    }
-    
-    // Options pour mobile
+    // Options
     const options = {
-      enableHighAccuracy: false,
-      timeout: 15000,
-      maximumAge: 300000
+      enableHighAccuracy: true,
+      timeout: 10000,
+      maximumAge: 0
     };
     
     try {
@@ -180,54 +241,40 @@ export const LocationPicker: React.FC<Props> = ({
           if (pos && pos.coords) {
             const { latitude, longitude, accuracy } = pos.coords;
             
-            console.log("📍 Position GPS mobile:", latitude, longitude);
-            
-            const { address, city, country } = await fetchAddress(latitude, longitude);
-            const newPos = { lat: latitude, lng: longitude, address, city, country };
-            
-            setPosition(newPos);
-            setMapCenter([latitude, longitude]);
-            setLocationStatus(`✅ Position GPS: ${city} (précision: ${Math.round(accuracy)}m)`);
-            
-            onLocationSelect(newPos);
-            toast.success(`📍 ${city} - Votre position GPS`);
+            console.log("📍 Position GPS détectée:", latitude, longitude);
+            await applyPosition(latitude, longitude);
+            setLocationStatus(`✅ Position GPS déterminée (Précision: ${Math.round(accuracy)}m)`);
             setIsLocating(false);
           } else {
             throw new Error("Invalid position object");
           }
         },
         (err) => {
-          // Formatage correct de l'erreur pour éviter le warning vide
           let errorMessage = "";
           switch (err.code) {
             case err.PERMISSION_DENIED:
-              errorMessage = "❌ Permission GPS refusée. Activez la localisation dans les paramètres de votre appareil.";
+              errorMessage = "❌ Permission GPS refusée. Activez la localisation dans vos paramètres.";
               break;
             case err.POSITION_UNAVAILABLE:
-              errorMessage = "❌ Signal GPS indisponible. Assurez-vous d'être à l'extérieur ou près d'une fenêtre.";
+              errorMessage = "❌ Signal GPS indisponible. Positionnez-vous près d'une fenêtre.";
               break;
             case err.TIMEOUT:
-              errorMessage = "⏱️ Délai GPS dépassé. Vérifiez votre connexion ou réessayez.";
+              errorMessage = "⏱️ Délai GPS dépassé. Veuillez réessayer ou entrer vos coordonnées.";
               break;
             default:
               errorMessage = `❌ Erreur GPS: ${err.message || "cause inconnue"}`;
           }
-          console.error("Geo error:", errorMessage);  // Maintenant un message lisible
+          console.error("Geo error:", errorMessage);
           setError(errorMessage);
           setLocationStatus(errorMessage);
           toast.error(errorMessage);
           setIsLocating(false);
-          
-          // Proposer Lubumbashi
-          setTimeout(() => {
-            toast.info("💡 Utilisez le bouton 'Lubumbashi' ou cliquez sur la carte");
-          }, 2000);
         },
         options
       );
     } catch (syncError: any) {
       console.error("Location picker synchronous GPS error caught:", syncError);
-      const errorMessage = "❌ Échec de l'accès au service de position. Sélectionnez une ville ou cliquez sur la carte.";
+      const errorMessage = "❌ Échec de l'accès au service de position.";
       setError(errorMessage);
       setLocationStatus(errorMessage);
       toast.error(errorMessage);
@@ -235,30 +282,53 @@ export const LocationPicker: React.FC<Props> = ({
     }
   };
 
+  // Saisie manuelle de coordonnées personnalisées
+  const handleManualApply = () => {
+    const lat = parseFloat(manualLat);
+    const lng = parseFloat(manualLng);
+    if (isNaN(lat) || isNaN(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+      toast.error("Coordonnées invalides. Entrez des nombres réels (ex: -11.66, 27.48).");
+      return;
+    }
+    applyPosition(lat, lng);
+  };
+
   // Fonction pour aller à une ville spécifique
   const goToCity = (cityName: string) => {
     const coords = CITY_COORDINATES[cityName];
     if (coords) {
       setMapCenter(coords);
+      setManualLat(coords[0].toString());
+      setManualLng(coords[1].toString());
       if (cityName === 'Lubumbashi') {
         selectLubumbashi();
       } else {
-        setPosition(null);
+        const customLocation = {
+          lat: coords[0],
+          lng: coords[1],
+          address: `${cityName}, République Démocratique du Congo`,
+          city: cityName,
+          country: "RDC"
+        };
+        setPosition(customLocation);
+        onLocationSelect(customLocation);
         setLocationStatus(`📍 Carte centrée sur ${cityName}`);
-        toast.info(`Affichage de ${cityName} - Cliquez sur la carte pour sélectionner`);
+        toast.info(`Affichage de ${cityName}`);
       }
     }
   };
 
-  // Initialiser avec Lubumbashi (pas de détection automatique)
+  // Initialiser ou mettre à jour avec l'emplacement initial si fourni
   useEffect(() => {
     if (!initialLocation) {
       selectLubumbashi();
     } else {
       setPosition(initialLocation);
       setMapCenter([initialLocation.lat, initialLocation.lng]);
+      setManualLat(initialLocation.lat.toString());
+      setManualLng(initialLocation.lng.toString());
     }
-  }, []);
+  }, [initialLocation?.lat, initialLocation?.lng]);
 
   return (
     <div className="space-y-4">
@@ -303,6 +373,46 @@ export const LocationPicker: React.FC<Props> = ({
         </select>
       </div>
 
+      {/* Saisie manuelle des coordonnées */}
+      <div className="bg-gray-50 dark:bg-gray-850/40 p-4 rounded-xl border border-gray-150 dark:border-gray-800 space-y-3">
+        <h4 className="text-[10px] font-black uppercase tracking-widest text-gray-500 dark:text-gray-400">
+          Saisie manuelle des coordonnées GPS
+        </h4>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-[9px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider block mb-1">
+              Latitude
+            </label>
+            <input
+              type="text"
+              value={manualLat}
+              onChange={(e) => setManualLat(e.target.value)}
+              placeholder="-11.6644"
+              className="w-full px-3 py-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl text-xs font-mono outline-none focus:border-orange-500 dark:focus:border-orange-500 transition-colors"
+            />
+          </div>
+          <div>
+            <label className="text-[9px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider block mb-1">
+              Longitude
+            </label>
+            <input
+              type="text"
+              value={manualLng}
+              onChange={(e) => setManualLng(e.target.value)}
+              placeholder="27.4795"
+              className="w-full px-3 py-2 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl text-xs font-mono outline-none focus:border-orange-500 dark:focus:border-orange-500 transition-colors"
+            />
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={handleManualApply}
+          className="w-full py-2 bg-gray-200 dark:bg-gray-700 hover:bg-orange-500 hover:text-white dark:hover:bg-orange-600 text-gray-800 dark:text-gray-200 rounded-xl text-xs font-bold transition-all active:scale-95"
+        >
+          Appliquer ces coordonnées
+        </button>
+      </div>
+
       {/* Statut de localisation */}
       {locationStatus && (
         <div className={`text-xs p-2 rounded-lg flex items-center gap-2 ${
@@ -336,8 +446,7 @@ export const LocationPicker: React.FC<Props> = ({
           />
           <LocationMarker 
             position={position} 
-            setPosition={setPosition} 
-            onLocationSelect={onLocationSelect} 
+            onPositionChange={applyPosition} 
           />
         </MapContainer>
 

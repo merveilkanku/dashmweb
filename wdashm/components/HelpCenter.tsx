@@ -20,7 +20,7 @@ interface HelpSection {
   }[];
 }
 
-const HELP_CONTENT: HelpSection[] = [
+const getHelpContent = (appSettings?: AppSettings | null): HelpSection[] => [
   {
     id: 'getting-started',
     title: 'Premiers Pas & Utilisation à 100%',
@@ -136,7 +136,7 @@ const HELP_CONTENT: HelpSection[] = [
       {
         id: 'official-email-details',
         title: 'Quelles sont nos coordonnées de support en RDC ?',
-        content: "Pour toute réclamation, signalement ou suggestion, notre canal d'écoute officiel et direct est l'adresse email : support@dashmeals-rdc.com. S'il vous plaît, ignorez les anciennes extensions .cd et .io. Notre équipe technique et d'assistance répond généralement en moins de 30 minutes 7j/7."
+        content: `Pour toute réclamation, signalement ou suggestion, notre canal d\'écoute officiel et direct est l\'adresse email : ${appSettings?.support_email || 'support@dashmeals-rdc.com'}. Téléphone d\'urgence : ${appSettings?.support_phone || '+243 842 578 529'}. WhatsApp : ${appSettings?.support_whatsapp || '+243 842 578 529'}. Siège social : ${appSettings?.office_address || 'Boulevard du 30 Juin, Gombe, Kinshasa, RDC.'}. Notre équipe d\'assistance répond généralement en moins de 30 minutes 7j/7.`
       }
     ]
   }
@@ -156,7 +156,8 @@ export const HelpCenter: React.FC<Props> = ({ user, onClose, appSettings }) => {
   const [ticketMessage, setTicketMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const filteredContent = HELP_CONTENT.map(section => ({
+  const helpSections = getHelpContent(appSettings);
+  const filteredContent = helpSections.map(section => ({
     ...section,
     articles: section.articles.filter(article => 
       article.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -233,74 +234,82 @@ export const HelpCenter: React.FC<Props> = ({ user, onClose, appSettings }) => {
         </div>
 
         {/* Support Info */}
-        <div className="bg-orange-50 dark:bg-orange-900/20 border border-orange-100 dark:border-orange-900/30 rounded-2xl p-6 mb-8">
-          <div className="flex items-start gap-4">
-            <div className="p-3 bg-orange-500 rounded-xl text-white">
-              <HelpCircle className="w-6 h-6" />
+        {/* Contact Quick Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+          <div className="bg-orange-50 dark:bg-orange-900/20 border border-orange-100 dark:border-orange-900/30 rounded-2xl p-5">
+            <div className="flex items-start gap-3">
+              <div className="p-3 bg-orange-500 rounded-xl text-white shrink-0">
+                <Mail className="w-5 h-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h2 className="text-sm font-bold text-orange-900 dark:text-orange-100 mb-0.5">E-mail de Support</h2>
+                <p className="text-orange-700/80 dark:text-orange-300 text-xs mb-2">Assistance générale & réclamations :</p>
+                <a 
+                  href={`mailto:${appSettings?.support_email || 'support@dashmeals-rdc.com'}`}
+                  className="inline-flex items-center gap-1.5 text-orange-600 dark:text-orange-400 font-bold text-sm hover:underline truncate max-w-full"
+                >
+                  <Mail className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">{appSettings?.support_email || 'support@dashmeals-rdc.com'}</span>
+                </a>
+              </div>
             </div>
-            <div>
-              <h2 className="text-lg font-bold text-orange-900 dark:text-orange-100 mb-1">Besoin d'une assistance directe ?</h2>
-              <p className="text-orange-700 dark:text-orange-300 text-sm mb-4">
-                Notre équipe est disponible pour vous aider. Contactez-nous par email à :
-              </p>
-              <a 
-                href={`mailto:${appSettings?.support_email || 'support@dashmeals-rdc.com'}`}
-                className="inline-flex items-center gap-2 text-orange-600 dark:text-orange-400 font-bold hover:underline"
-              >
-                <Mail className="w-4 h-4" />
-                {appSettings?.support_email || 'support@dashmeals-rdc.com'}
-              </a>
+          </div>
+
+          <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-900/30 rounded-2xl p-5">
+            <div className="flex items-start gap-3">
+              <div className="p-3 bg-blue-500 rounded-xl text-white shrink-0">
+                <Phone className="w-5 h-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h2 className="text-sm font-bold text-blue-900 dark:text-blue-100 mb-0.5">Contact Téléphonique</h2>
+                <p className="text-blue-700/80 dark:text-blue-300 text-xs mb-2">Urgence & commandes en cours :</p>
+                <a 
+                  href={`tel:${appSettings?.support_phone || "+243 842 578 529"}`}
+                  className="inline-flex items-center gap-1.5 text-blue-600 dark:text-blue-400 font-bold text-sm hover:underline"
+                >
+                  <Phone className="w-3.5 h-3.5 shrink-0" />
+                  <span>{appSettings?.support_phone || "+243 842 578 529"}</span>
+                </a>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-green-50 dark:bg-green-900/20 border border-green-100 dark:border-green-900/30 rounded-2xl p-5">
+            <div className="flex items-start gap-3">
+              <div className="p-3 bg-green-500 rounded-xl text-white shrink-0">
+                <MessageSquare className="w-5 h-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h2 className="text-sm font-bold text-green-900 dark:text-green-100 mb-0.5">Support WhatsApp</h2>
+                <p className="text-green-700/80 dark:text-green-300 text-xs mb-2">Discussion directe instantanée :</p>
+                <a 
+                  href={`https://wa.me/${(appSettings?.support_whatsapp || "+243 842 578 529").replace(/\s+/g, '').replace('+', '')}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 text-green-600 dark:text-green-400 font-bold text-sm hover:underline"
+                >
+                  <MessageSquare className="w-3.5 h-3.5 shrink-0" />
+                  <span>{appSettings?.support_whatsapp || "+243 842 578 529"}</span>
+                </a>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-purple-50 dark:bg-purple-900/20 border border-purple-100 dark:border-purple-900/30 rounded-2xl p-5">
+            <div className="flex items-start gap-3">
+              <div className="p-3 bg-purple-500 rounded-xl text-white shrink-0">
+                <Book className="w-5 h-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h2 className="text-sm font-bold text-purple-900 dark:text-purple-100 mb-0.5">Adresse du Siège</h2>
+                <p className="text-purple-700/80 dark:text-purple-300 text-xs mb-2">Bureaux administratifs :</p>
+                <p className="text-purple-900 dark:text-purple-100 font-bold text-xs leading-relaxed">
+                  {appSettings?.office_address || 'Boulevard du 30 Juin, Gombe, Kinshasa, RDC.'}
+                </p>
+              </div>
             </div>
           </div>
         </div>
-
-        {appSettings?.support_phone && (
-          <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-900/30 rounded-2xl p-6 mb-8">
-            <div className="flex items-start gap-4">
-              <div className="p-3 bg-blue-500 rounded-xl text-white">
-                <Phone className="w-6 h-6" />
-              </div>
-              <div>
-                <h2 className="text-lg font-bold text-blue-900 dark:text-blue-100 mb-1">Contact d'Urgence</h2>
-                <p className="text-blue-700 dark:text-blue-300 text-sm mb-4">
-                  Pour une assistance immédiate par téléphone :
-                </p>
-                <a 
-                  href={`tel:${appSettings.support_phone}`}
-                  className="inline-flex items-center gap-2 text-blue-600 dark:text-blue-400 font-bold hover:underline"
-                >
-                  <Phone className="w-4 h-4" />
-                  {appSettings.support_phone}
-                </a>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {appSettings?.support_whatsapp && (
-          <div className="bg-green-50 dark:bg-green-900/20 border border-green-100 dark:border-green-900/30 rounded-2xl p-6 mb-8">
-            <div className="flex items-start gap-4">
-              <div className="p-3 bg-green-500 rounded-xl text-white">
-                <MessageSquare className="w-6 h-6" />
-              </div>
-              <div>
-                <h2 className="text-lg font-bold text-green-900 dark:text-green-100 mb-1">Support WhatsApp</h2>
-                <p className="text-green-700 dark:text-green-300 text-sm mb-4">
-                  Contactez-nous directement via WhatsApp :
-                </p>
-                <a 
-                  href={`https://wa.me/${appSettings.support_whatsapp.replace(/\s+/g, '').replace('+', '')}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-2 text-green-600 dark:text-green-400 font-bold hover:underline"
-                >
-                  <MessageSquare className="w-4 h-4" />
-                  {appSettings.support_whatsapp}
-                </a>
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* Help Sections */}
         <div className="space-y-6">

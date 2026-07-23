@@ -256,10 +256,12 @@ CREATE POLICY "Public Read Cities" ON public.cities FOR SELECT USING (true);
 CREATE POLICY "Admins can manage cities" ON public.cities FOR ALL USING (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.role = 'superadmin') OR (auth.jwt() ->> 'email' = 'irmerveilkanku@gmail.com')) WITH CHECK (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.role = 'superadmin') OR (auth.jwt() ->> 'email' = 'irmerveilkanku@gmail.com'));
 
 -- 7. ACTIVATION REALTIME (CRITIQUE POUR LA DEMANDE)
--- Ajout des tables 'messages', 'orders' et 'restaurants' à la publication realtime
+-- Ajout des tables 'messages', 'orders', 'restaurants', 'menu_items' et 'promotions' à la publication realtime
 alter publication supabase_realtime add table messages;
 alter publication supabase_realtime add table orders;
 alter publication supabase_realtime add table restaurants;
+alter publication supabase_realtime add table menu_items;
+alter publication supabase_realtime add table promotions;
 
 -- Données initiales
 insert into public.cities (name, latitude, longitude) values ('Kinshasa', -4.4419, 15.2663) on conflict (name) do nothing;

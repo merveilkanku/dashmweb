@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Receipt, ShoppingBag, Phone, MessageSquare, CheckCircle2, Circle, Bike, ChefHat, Clock, Camera, Star, X, Banknote, Smartphone, Zap, AlertCircle, MapPin, Navigation, ChevronRight } from 'lucide-react';
+import { Receipt, ShoppingBag, Phone, MessageSquare, CheckCircle2, Circle, Bike, ChefHat, Clock, Camera, Star, X, Banknote, Smartphone, Zap, AlertCircle, MapPin, Navigation, ChevronRight, CreditCard } from 'lucide-react';
 import { toast } from 'sonner';
 import { Order, OrderStatus, Restaurant } from '../types';
 import { formatDualPrice } from '../utils/format';
 import { supabase } from '../lib/supabase';
 import { DeliveryTrackingMap } from './DeliveryTrackingMap';
+import { LiveDeliveryMap } from './LiveDeliveryMap';
 import { isUserOnline, formatLastSeen } from '../utils/presence';
 
 interface Props {
@@ -414,6 +415,7 @@ export const OrdersView: React.FC<Props> = ({ orders, onChat, onLivreurChat, onB
                 {displayedOrders.map(order => {
                    const isCompleted = order.status === 'completed';
                    const isCancelled = order.status === 'cancelled';
+                   const isPrivateCourier = order.items && order.items[0]?.isPrivateCourier === true;
                    
                    // Déterminer l'état pour la timeline
                    const s = order.status;
@@ -436,7 +438,9 @@ export const OrdersView: React.FC<Props> = ({ orders, onChat, onLivreurChat, onB
                             <div className="flex justify-between items-start mb-1">
                                 <div>
                                     <div className="flex items-center space-x-2">
-                                        <h3 className="font-bold text-gray-800 text-lg">{order.restaurant?.name || 'Restaurant inconnu'}</h3>
+                                        <h3 className="font-bold text-gray-800 text-lg">
+                                             {isPrivateCourier ? 'Course Privée 📦' : (order.restaurant?.name || 'Restaurant inconnu')}
+                                         </h3>
                                         {order.isUrgent && (
                                             <span className="bg-red-500 text-white px-2 py-0.5 rounded text-[10px] font-bold uppercase flex items-center shadow-sm animate-pulse-fast">
                                                 <Zap size={10} className="mr-1 fill-white" /> Urgent
@@ -449,13 +453,20 @@ export const OrdersView: React.FC<Props> = ({ orders, onChat, onLivreurChat, onB
                             </div>
                             <div className="flex items-center space-x-2 mt-2">
                                 <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-gray-100 text-gray-600 flex items-center">
-                                    {order.paymentMethod === 'cash' ? <Banknote size={10} className="mr-1"/> : <Smartphone size={10} className="mr-1"/>}
-                                    {order.paymentMethod === 'cash' ? 'Cash' : `Mobile Money (${order.paymentNetwork?.toUpperCase()})`}
+                                    {order.paymentMethod === 'cash' ? <Banknote size={10} className="mr-1"/> : (order.paymentMethod === 'kpay' || order.paymentMethod === 'money_fusion') ? <CreditCard size={10} className="mr-1"/> : <Smartphone size={10} className="mr-1"/>}
+                                    {order.paymentMethod === 'cash' ? 'Cash' : order.paymentMethod === 'kpay' ? 'KPay' : order.paymentMethod === 'money_fusion' ? 'Money Fusion' : `Mobile Money (${order.paymentNetwork?.toUpperCase()})`}
                                 </span>
                                 <span className={`text-[10px] font-bold px-2 py-0.5 rounded flex items-center ${order.paymentStatus === 'paid' ? 'bg-green-100 text-green-700' : order.paymentStatus === 'failed' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'}`}>
                                     {order.paymentStatus === 'paid' ? 'Payé' : order.paymentStatus === 'failed' ? 'Preuve refusée' : 'En attente de paiement'}
                                 </span>
                                 {(() => {
+                                    if (isPrivateCourier) {
+                                        return (
+                                            <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-orange-100 text-orange-850 flex items-center">
+                                                📦 Course Privée
+                                            </span>
+                                        );
+                                    }
                                     const isTakeaway = order.delivery_fee === 0 || (order.items && order.items[0]?.fulfillmentMode === 'pickup') || order.delivery_location?.address?.includes('Récupération') || order.delivery_location?.address?.includes('emporter');
                                     return (
                                         <span className={`text-[10px] font-bold px-2 py-0.5 rounded flex items-center ${isTakeaway ? 'bg-amber-100 text-amber-800' : 'bg-blue-105 text-blue-800'}`}>
@@ -584,31 +595,63 @@ export const OrdersView: React.FC<Props> = ({ orders, onChat, onLivreurChat, onB
                             {/* TIMELINE DE SUIVI (Seulement si pas annulé) */}
                             {!isCancelled && !isCompleted && (
                                 <div className="mb-6 pl-2 mt-2">
-                                    <TimelineStep 
-                                        active={isPending} 
-                                        completed={step1Complete} 
-                                        icon={Clock} 
-                                        title="Commande reçue" 
-                                    />
-                                    <TimelineStep 
-                                        active={isPrep} 
-                                        completed={step2Complete} 
-                                        icon={ChefHat} 
-                                        title="Préparation en cuisine" 
-                                    />
-                                    <TimelineStep 
-                                        active={isReady || isDelivering} 
-                                        completed={step3Complete} 
-                                        icon={Bike} 
-                                        title="En route vers vous" 
-                                    />
-                                    <TimelineStep 
-                                        active={isDelivered} 
-                                        completed={step4Complete} 
-                                        icon={CheckCircle2} 
-                                        title="Livré et savouré" 
-                                        isLast
-                                    />
+                                    {isPrivateCourier ? (
+                                        <>
+                                            <TimelineStep 
+                                                active={isPending} 
+                                                completed={step1Complete} 
+                                                icon={Clock} 
+                                                title="Demande validée" 
+                                            />
+                                            <TimelineStep 
+                                                active={isPrep} 
+                                                completed={step2Complete} 
+                                                icon={Bike} 
+                                                title="Livreur en route pour le retrait" 
+                                            />
+                                            <TimelineStep 
+                                                active={isReady || isDelivering} 
+                                                completed={step3Complete} 
+                                                icon={ShoppingBag} 
+                                                title="Colis en cours d'acheminement" 
+                                            />
+                                            <TimelineStep 
+                                                active={isDelivered} 
+                                                completed={step4Complete} 
+                                                icon={CheckCircle2} 
+                                                title="Colis livré au destinataire" 
+                                                isLast
+                                            />
+                                        </>
+                                    ) : (
+                                        <>
+                                            <TimelineStep 
+                                                active={isPending} 
+                                                completed={step1Complete} 
+                                                icon={Clock} 
+                                                title="Commande reçue" 
+                                            />
+                                            <TimelineStep 
+                                                active={isPrep} 
+                                                completed={step2Complete} 
+                                                icon={ChefHat} 
+                                                title="Préparation en cuisine" 
+                                            />
+                                            <TimelineStep 
+                                                active={isReady || isDelivering} 
+                                                completed={step3Complete} 
+                                                icon={Bike} 
+                                                title="En route vers vous" 
+                                            />
+                                            <TimelineStep 
+                                                active={isDelivered} 
+                                                completed={step4Complete} 
+                                                icon={CheckCircle2} 
+                                                title="Livré et savouré" 
+                                                isLast
+                                            />
+                                        </>
+                                    )}
                                 </div>
                             )}
 
@@ -623,48 +666,108 @@ export const OrdersView: React.FC<Props> = ({ orders, onChat, onLivreurChat, onB
                                             {isDelivered ? 'Livreur arrivé' : 'Livreur à proximité'}
                                         </span>
                                     </div>
-                                    <DeliveryTrackingMap 
-                                        order={order} 
-                                        restaurant={order.restaurant ? {
-                                            id: order.restaurantId,
-                                            name: order.restaurant.name,
-                                            latitude: order.restaurant.latitude || -4.312,
-                                            longitude: order.restaurant.longitude || 15.310,
-                                        } as any : null} 
+                                    <LiveDeliveryMap 
+                                        orderId={order.id} 
+                                        restaurantCoords={isPrivateCourier 
+                                            ? (order.deliveryLocation?.pickupLat && order.deliveryLocation?.pickupLng 
+                                                ? { lat: order.deliveryLocation.pickupLat, lng: order.deliveryLocation.pickupLng } 
+                                                : undefined)
+                                            : (order.restaurant 
+                                                ? { lat: order.restaurant.latitude || -4.312, lng: order.restaurant.longitude || 15.310 } 
+                                                : undefined)
+                                        }
+                                        customerCoords={order.deliveryLocation 
+                                            ? { lat: order.deliveryLocation.lat || -4.325, lng: order.deliveryLocation.lng || 15.322 } 
+                                            : undefined
+                                        }
+                                        fallbackLat={order.delivery_lat}
+                                        fallbackLng={order.delivery_lng}
+                                        isPrivateCourier={isPrivateCourier}
                                     />
                                 </div>
                             )}
 
-                            {/* Liste des articles simplifiée */}
+                            {/* Liste des articles simplifiée / Détails Course Privée */}
                             <div className="bg-gray-50 p-3 rounded-lg mb-4 text-sm">
-                                {order.deliveryLocation && (
-                                    <div className="mb-3 pb-3 border-b border-gray-200">
-                                        <div className="flex items-start text-xs text-gray-600">
-                                            <MapPin size={14} className="mr-1.5 mt-0.5 text-brand-600 flex-shrink-0"/> 
-                                            <div>
-                                                <span className="font-bold block text-gray-800">Adresse de livraison:</span>
-                                                {order.deliveryLocation.address}
+                                {isPrivateCourier ? (
+                                    <div className="space-y-3 text-left">
+                                        <div className="pb-2.5 border-b border-gray-200">
+                                            <div className="flex items-start text-xs text-gray-600">
+                                                <MapPin size={14} className="mr-1.5 mt-0.5 text-orange-500 flex-shrink-0"/> 
+                                                <div>
+                                                    <span className="font-bold block text-gray-800">Point de retrait :</span>
+                                                    <span className="font-medium text-gray-900">{order.items[0]?.pickupAddress || 'Non spécifié'}</span>
+                                                </div>
                                             </div>
                                         </div>
-                                    </div>
-                                )}
-                                {order.items.map((item, idx) => (
-                                    <div key={idx} className="flex justify-between items-center mb-1 last:mb-0">
-                                        <div className="flex items-center text-gray-600">
-                                            <span className="font-bold mr-2 text-xs text-gray-400">x{item.quantity}</span>
-                                            <span>{item.name}</span>
+                                        <div className="pb-2.5 border-b border-gray-200">
+                                            <div className="flex items-start text-xs text-gray-600">
+                                                <MapPin size={14} className="mr-1.5 mt-0.5 text-brand-600 flex-shrink-0"/> 
+                                                <div>
+                                                    <span className="font-bold block text-gray-800">Point de livraison :</span>
+                                                    <span className="font-medium text-gray-900">{order.items[0]?.deliveryAddress || 'Non spécifié'}</span>
+                                                </div>
+                                            </div>
                                         </div>
-                                        <span className="font-medium text-gray-800 text-xs">
-                                            {formatDualPrice((item.price || 0) * (item.quantity || 1), order.restaurant?.currency as 'USD' | 'CDF' || 'USD', order.exchangeRate, order.restaurant?.displayCurrencyMode)}
-                                        </span>
+                                        <div className="pb-2.5 border-b border-gray-200">
+                                            <div className="flex items-start text-xs text-gray-600">
+                                                <ShoppingBag size={14} className="mr-1.5 mt-0.5 text-gray-500 flex-shrink-0"/> 
+                                                <div>
+                                                    <span className="font-bold block text-gray-800">Détails du colis :</span>
+                                                    <span className="font-medium text-gray-900">{order.items[0]?.description || 'Colis général'}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        {order.items[0]?.recipientName && (
+                                            <div className="pb-2.5 border-b border-gray-200">
+                                                <div className="flex items-start text-xs text-gray-600">
+                                                    <Phone size={14} className="mr-1.5 mt-0.5 text-gray-500 flex-shrink-0"/> 
+                                                    <div>
+                                                        <span className="font-bold block text-gray-800">Destinataire :</span>
+                                                        <span className="font-medium text-gray-900">{order.items[0]?.recipientName} {order.items[0]?.recipientPhone && `(${order.items[0]?.recipientPhone})`}</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+                                        <div className="flex justify-between items-center pt-2">
+                                            <span className="font-bold text-gray-600">Frais de course (Forfait)</span>
+                                            <span className="font-black text-brand-600 text-sm">
+                                                $5.00 (14 000 FC)
+                                            </span>
+                                        </div>
                                     </div>
-                                ))}
-                                <div className="flex justify-between items-center pt-2 mt-2 border-t border-gray-200">
-                                    <span className="font-bold text-gray-600">Total</span>
-                                    <span className="font-black text-brand-600 text-sm">
-                                        {formatDualPrice(order.totalAmount || 0, order.restaurant?.currency as 'USD' | 'CDF' || 'USD', order.exchangeRate, order.restaurant?.displayCurrencyMode)}
-                                    </span>
-                                </div>
+                                ) : (
+                                    <>
+                                        {order.deliveryLocation && (
+                                            <div className="mb-3 pb-3 border-b border-gray-200">
+                                                <div className="flex items-start text-xs text-gray-600">
+                                                    <MapPin size={14} className="mr-1.5 mt-0.5 text-brand-600 flex-shrink-0"/> 
+                                                    <div>
+                                                        <span className="font-bold block text-gray-800">Adresse de livraison:</span>
+                                                        {order.deliveryLocation.address}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+                                        {order.items.map((item, idx) => (
+                                            <div key={idx} className="flex justify-between items-center mb-1 last:mb-0">
+                                                <div className="flex items-center text-gray-600">
+                                                    <span className="font-bold mr-2 text-xs text-gray-400">x{item.quantity}</span>
+                                                    <span>{item.name}</span>
+                                                </div>
+                                                <span className="font-medium text-gray-800 text-xs">
+                                                    {formatDualPrice((item.price || 0) * (item.quantity || 1), order.restaurant?.currency as 'USD' | 'CDF' || 'USD', order.exchangeRate, order.restaurant?.displayCurrencyMode)}
+                                                </span>
+                                            </div>
+                                        ))}
+                                        <div className="flex justify-between items-center pt-2 mt-2 border-t border-gray-200">
+                                            <span className="font-bold text-gray-600">Total</span>
+                                            <span className="font-black text-brand-600 text-sm">
+                                                {formatDualPrice(order.totalAmount || 0, order.restaurant?.currency as 'USD' | 'CDF' || 'USD', order.exchangeRate, order.restaurant?.displayCurrencyMode)}
+                                            </span>
+                                        </div>
+                                    </>
+                                )}
                             </div>
 
                             {/* Actions */}
@@ -681,16 +784,23 @@ export const OrdersView: React.FC<Props> = ({ orders, onChat, onLivreurChat, onB
                                     ) : (
                                         <div className="bg-gray-100 p-3 rounded-lg text-center">
                                             <p className="text-xs text-gray-500 font-bold">
-                                                {isPending ? "En attente de validation par le restaurant..." : 
-                                                 isPrep ? "Le restaurant prépare votre commande..." : 
-                                                 isReady ? "Votre commande est prête ! En attente d'un livreur..." :
-                                                 "Le livreur est en route..."}
+                                                {isPrivateCourier ? (
+                                                    isPending ? "Recherche d'un livreur disponible..." : 
+                                                    isPrep ? "Le livreur est en route vers le point de retrait..." : 
+                                                    isReady ? "Le livreur a récupéré votre colis !" :
+                                                    "Le livreur achemine votre colis..."
+                                                ) : (
+                                                    isPending ? "En attente de validation par le restaurant..." : 
+                                                    isPrep ? "Le restaurant prépare votre commande..." : 
+                                                    isReady ? "Votre commande est prête ! En attente d'un livreur..." :
+                                                    "Le livreur est en route..."
+                                                )}
                                             </p>
                                         </div>
                                     )}
 
                                     {(() => {
-                                        const isTakeawayOrder = order.delivery_fee === 0 || (order.items && order.items[0]?.fulfillmentMode === 'pickup') || order.delivery_location?.address?.includes('Récupération') || order.delivery_location?.address?.includes('emporter');
+                                        const isTakeawayOrder = isPrivateCourier || order.delivery_fee === 0 || (order.items && order.items[0]?.fulfillmentMode === 'pickup') || order.delivery_location?.address?.includes('Récupération') || order.delivery_location?.address?.includes('emporter');
                                         return !isTakeawayOrder && !isDelivered ? (
                                             <button
                                                 onClick={() => setFlippingOrderToTakeaway(order)}
@@ -702,20 +812,56 @@ export const OrdersView: React.FC<Props> = ({ orders, onChat, onLivreurChat, onB
                                     })()}
 
                                     <div className="grid grid-cols-2 gap-3">
-                                        <button 
-                                            onClick={() => window.open(`tel:${order.restaurant?.phone_number || '+243999999999'}`)} 
-                                            className="flex items-center justify-center py-3 bg-white border border-gray-200 text-gray-700 rounded-xl text-xs font-bold hover:bg-gray-50 transition-colors"
-                                        >
-                                            <Phone size={16} className="mr-2" /> Appeler
-                                        </button>
-                                        <button 
-                                            onClick={() => onChat(order)} 
-                                            className="flex items-center justify-center py-3 bg-brand-600 text-white rounded-xl text-xs font-bold hover:bg-brand-700 shadow-lg shadow-brand-200 transition-all active:scale-95 relative overflow-hidden group"
-                                        >
-                                            <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
-                                            <MessageSquare size={16} className="mr-2 relative z-10" /> 
-                                            <span className="relative z-10">Discuter avec le resto</span>
-                                        </button>
+                                        {isPrivateCourier ? (
+                                            <>
+                                                {order.items[0]?.recipientPhone ? (
+                                                    <a 
+                                                        href={`tel:${order.items[0].recipientPhone}`}
+                                                        className="flex items-center justify-center py-3 bg-white border border-gray-200 text-gray-700 rounded-xl text-xs font-bold hover:bg-gray-50 transition-colors flex-1"
+                                                    >
+                                                        <Phone size={16} className="mr-2" /> Appeler Dest.
+                                                    </a>
+                                                ) : (
+                                                    <button 
+                                                        onClick={() => alert('Pas de numéro de téléphone spécifié pour le destinataire.')}
+                                                        className="flex items-center justify-center py-3 bg-white border border-gray-200 text-gray-400 rounded-xl text-xs font-bold cursor-not-allowed flex-1"
+                                                        disabled
+                                                    >
+                                                        <Phone size={16} className="mr-2" /> Appeler Dest.
+                                                    </button>
+                                                )}
+                                                <button 
+                                                    onClick={() => {
+                                                        if (order.delivery_acceptance_status === 'accepted') {
+                                                            if (onLivreurChat) onLivreurChat(order);
+                                                            else onChat(order);
+                                                        } else {
+                                                            alert('Le chat sera disponible dès qu\'un livreur aura accepté la course.');
+                                                        }
+                                                    }}
+                                                    className="flex items-center justify-center py-3 bg-orange-600 text-white rounded-xl text-xs font-bold hover:bg-orange-700 shadow-lg shadow-orange-200 transition-all active:scale-95 flex-1"
+                                                >
+                                                    <MessageSquare size={16} className="mr-2" /> Chat Livreur
+                                                </button>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <button 
+                                                    onClick={() => window.open(`tel:${order.restaurant?.phone_number || '+243999999999'}`)} 
+                                                    className="flex items-center justify-center py-3 bg-white border border-gray-200 text-gray-700 rounded-xl text-xs font-bold hover:bg-gray-50 transition-colors"
+                                                >
+                                                    <Phone size={16} className="mr-2" /> Appeler
+                                                </button>
+                                                <button 
+                                                    onClick={() => onChat(order)} 
+                                                    className="flex items-center justify-center py-3 bg-brand-600 text-white rounded-xl text-xs font-bold hover:bg-brand-700 shadow-lg shadow-brand-200 transition-all active:scale-95 relative overflow-hidden group"
+                                                >
+                                                    <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
+                                                    <MessageSquare size={16} className="mr-2 relative z-10" /> 
+                                                    <span className="relative z-10">Discuter avec le resto</span>
+                                                </button>
+                                            </>
+                                        )}
                                     </div>
                                     <div className="bg-blue-50 p-3 rounded-lg flex items-start space-x-3">
                                         <div className="bg-blue-100 p-1.5 rounded-full text-blue-600 mt-0.5">

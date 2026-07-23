@@ -8,7 +8,7 @@ export const KINSHASA_CENTER_LNG = 15.301;
 
 // Replace this URL with your actual hosted logo URL (e.g., from Supabase Storage or a public URL)
 // For best results, use a PNG with a transparent background.
-export const APP_LOGO_URL = "https://img.icons8.com/fluency/96/fast-food.png";
+export const APP_LOGO_URL = "/logo.png";
 
 export const CITIES_RDC = [
   "Kinshasa",

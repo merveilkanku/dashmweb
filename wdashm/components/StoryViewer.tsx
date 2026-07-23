@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, ChevronLeft, ChevronRight, MapPin, Plus, ShoppingBag, Sparkles } from 'lucide-react';
-import { Promotion, Restaurant, MenuItem } from '../types';
+import { X, ChevronLeft, ChevronRight, MapPin, Plus, ShoppingBag, Sparkles, Ticket } from 'lucide-react';
+import { Promotion, Restaurant, MenuItem, User, ClaimedOffer } from '../types';
 import { parsePromoCaption } from './CustomerView';
+import { claimOffer } from '../utils/claimedOffers';
+import { ClaimedOfferModal } from './ClaimedOfferModal';
 
 interface Props {
   restaurant: Restaurant;
@@ -10,6 +12,7 @@ interface Props {
   onVisitRestaurant: () => void;
   initialIndex?: number;
   onAddToCart?: (item: MenuItem, restaurant: Restaurant) => void;
+  currentUser?: User;
 }
 
 export const StoryViewer: React.FC<Props> = ({ 
@@ -18,10 +21,13 @@ export const StoryViewer: React.FC<Props> = ({
   onClose, 
   onVisitRestaurant, 
   initialIndex = 0,
-  onAddToCart 
+  onAddToCart,
+  currentUser
 }) => {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [progress, setProgress] = useState(0);
+  const [activatedOffer, setActivatedOffer] = useState<ClaimedOffer | null>(null);
+  const [activating, setActivating] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   
   const currentPromo = promotions[currentIndex];
@@ -30,7 +36,7 @@ export const StoryViewer: React.FC<Props> = ({
   useEffect(() => {
     setProgress(0);
     const interval = setInterval(() => {
-      if (currentPromo && currentPromo.mediaType === 'image') {
+      if (currentPromo && currentPromo.mediaType === 'image' && !activatedOffer) {
         setProgress(old => {
           const newProgress = old + (100 / (DURATION / 50)); // Update every 50ms
           if (newProgress >= 100) {
@@ -42,27 +48,62 @@ export const StoryViewer: React.FC<Props> = ({
     }, 50);
 
     return () => clearInterval(interval);
-  }, [currentIndex, currentPromo]);
+  }, [currentIndex, currentPromo, activatedOffer]);
+
+  // Handle Activer Offre
+  const handleActivateOffer = async () => {
+    if (!currentPromo) return;
+    setActivating(true);
+
+    const parsedPromo = parsePromoCaption(currentPromo.caption);
+    const linkedItem = parsedPromo.isPromoProduct && parsedPromo.menuItemId
+      ? restaurant.menu?.find(item => item.id === parsedPromo.menuItemId)
+      : null;
+
+    const offerTitle = linkedItem ? linkedItem.name : (parsedPromo.caption || 'Offre Spéciale ' + restaurant.name);
+
+    const defaultUser: User = currentUser || {
+      id: 'client_' + Date.now(),
+      name: 'Client',
+      email: '',
+      role: 'client',
+      city: restaurant.city || 'Kinshasa'
+    };
+
+    const newClaimed = await claimOffer({
+      user: defaultUser,
+      restaurant,
+      promo: currentPromo,
+      title: offerTitle,
+      caption: parsedPromo.caption,
+      badgeText: parsedPromo.badgeText || '-15%',
+      promoPrice: parsedPromo.promoPrice,
+      originalPrice: linkedItem?.price
+    });
+
+    setActivating(false);
+    setActivatedOffer(newClaimed);
+  };
 
   // Watch progress to trigger next story
   useEffect(() => {
-      if (progress >= 100) {
+      if (progress >= 100 && !activatedOffer) {
           if (currentPromo && currentPromo.mediaType === 'image') {
               nextStory();
           }
       }
-  }, [progress]);
+  }, [progress, activatedOffer]);
 
   // Handle Video Progress manually via event listeners
   const handleVideoUpdate = () => {
-      if (videoRef.current) {
+      if (videoRef.current && !activatedOffer) {
           const percent = (videoRef.current.currentTime / videoRef.current.duration) * 100;
           setProgress(percent);
       }
   };
 
   const handleVideoEnd = () => {
-      nextStory();
+      if (!activatedOffer) nextStory();
   };
 
   const nextStory = () => {
@@ -199,16 +240,36 @@ export const StoryViewer: React.FC<Props> = ({
               </div>
             )}
             
-            <button 
-                onClick={() => { onClose(); onVisitRestaurant(); }}
-                className="w-full bg-white hover:bg-gray-100 text-black font-black py-4 rounded-[20px] flex items-center justify-center space-x-2 shadow-xl hover:shadow-2xl transition-all active:scale-95 text-xs uppercase tracking-widest"
-            >
-                <Sparkles size={14} className="text-brand-500 animate-spin" />
-                <span>{linkedItem ? "Découvrir l'établissement" : "Commander maintenant"}</span>
-            </button>
+            {/* ACTION BUTTONS */}
+            <div className="space-y-2">
+              <button 
+                  onClick={handleActivateOffer}
+                  disabled={activating}
+                  className="w-full bg-brand-500 hover:bg-brand-600 text-white font-black py-3.5 rounded-[20px] flex items-center justify-center space-x-2 shadow-xl hover:shadow-2xl transition-all active:scale-95 text-xs uppercase tracking-widest border border-brand-400/50"
+              >
+                  <Ticket size={16} className="text-white animate-bounce" />
+                  <span>{activating ? 'Génération du Code...' : 'Activer l\'Offre & Obtenir le Code'}</span>
+              </button>
+
+              <button 
+                  onClick={() => { onClose(); onVisitRestaurant(); }}
+                  className="w-full bg-white/90 hover:bg-white text-black font-extrabold py-3 rounded-[20px] flex items-center justify-center space-x-2 shadow-md transition-all active:scale-95 text-[11px] uppercase tracking-wider"
+              >
+                  <Sparkles size={14} className="text-brand-500" />
+                  <span>{linkedItem ? "Découvrir l'établissement" : "Commander maintenant"}</span>
+              </button>
+            </div>
         </div>
 
       </div>
+
+      {/* CLAIMED OFFER MODAL POPUP */}
+      {activatedOffer && (
+        <ClaimedOfferModal
+          offer={activatedOffer}
+          onClose={() => setActivatedOffer(null)}
+        />
+      )}
     </div>
   );
 };

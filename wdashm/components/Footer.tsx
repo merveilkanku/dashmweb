@@ -17,8 +17,10 @@ export const Footer: React.FC<FooterProps> = ({ onLegalClick, className = "", ap
       <div className="max-w-7xl mx-auto grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-12">
         {/* Brand & Mission */}
         <div className="space-y-6">
-          <div className="flex items-center space-x-2">
-            <img src={APP_LOGO_URL} alt="DashMeals Logo" className="w-10 h-10 rounded-xl shadow-lg border-2 border-white dark:border-gray-800" />
+          <div className="flex items-center space-x-3">
+            <div className="bg-brand-500 rounded-xl shadow-lg border-2 border-brand-400 flex items-center justify-center overflow-hidden w-10 h-10">
+              <img src={APP_LOGO_URL} alt="DashMeals Logo" className="w-full h-full object-cover" />
+            </div>
             <h2 className="text-2xl font-black text-gray-900 dark:text-white tracking-tighter uppercase">DashMeals</h2>
           </div>
           <p className="text-sm text-gray-500 dark:text-gray-400 leading-relaxed font-medium">
@@ -112,7 +114,7 @@ export const Footer: React.FC<FooterProps> = ({ onLegalClick, className = "", ap
         <div>
           <h3 className="text-xs font-black text-gray-400 dark:text-gray-500 uppercase tracking-[0.2em] mb-6">Paiements Sécurisés</h3>
           <div className="flex flex-wrap gap-3">
-             <div className="bg-gray-100 dark:bg-gray-800 px-3 py-1.5 rounded-lg text-[10px] font-black text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-700">MONEY FUSION</div>
+             <div className="bg-gray-100 dark:bg-gray-800 px-3 py-1.5 rounded-lg text-[10px] font-black text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-700">KPAY</div>
              <div className="bg-gray-100 dark:bg-gray-800 px-3 py-1.5 rounded-lg text-[10px] font-black text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-700">M-PESA</div>
              <div className="bg-gray-100 dark:bg-gray-800 px-3 py-1.5 rounded-lg text-[10px] font-black text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-700">AIRTEL MONEY</div>
              <div className="bg-gray-100 dark:bg-gray-800 px-3 py-1.5 rounded-lg text-[10px] font-black text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-700">ORANGE MONEY</div>

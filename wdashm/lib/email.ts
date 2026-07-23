@@ -184,3 +184,49 @@ export const sendSupportReplyEmail = async (userName: string, userEmail: string,
     html
   });
 };
+
+export const sendPrivateCourierStatusEmail = async (order: any, userEmail: string, status: string) => {
+  const statusMessages: Record<string, string> = {
+    pending: "est en attente de livreur ⌛",
+    preparing: "a été acceptée par le livreur, qui se dirige vers le point de retrait 🛵",
+    ready: "est récupérée et en cours de transport 📦",
+    delivering: "est en cours de livraison 🛵",
+    delivered: "a été livrée avec succès ! ✅",
+    completed: "est entièrement terminée. Merci de votre confiance ! ✨",
+    cancelled: "a été annulée ❌"
+  };
+
+  const statusMessage = statusMessages[status] || `a changé de statut : ${status}`;
+  const item = order.items?.[0] || {};
+  const pickup = item.pickupAddress || "Non spécifié";
+  const delivery = item.deliveryAddress || "Non spécifié";
+  const description = item.description || "Colis général";
+
+  const html = `
+    <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #f0f0f0; padding: 24px; border-radius: 16px; background-color: #ffffff;">
+      <h2 style="color: #ea580c; margin-top: 0;">Mise à jour de votre Course Privée 📦</h2>
+      <p>Bonjour,</p>
+      <p>Votre course privée <strong>#${order.id.slice(0, 8)}</strong> ${statusMessage}.</p>
+      
+      <div style="background-color: #fcf8f5; border: 1px solid #ffedd5; padding: 16px; border-radius: 12px; margin: 20px 0;">
+        <h4 style="margin: 0 0 10px 0; color: #c2410c; text-transform: uppercase; font-size: 11px; letter-spacing: 0.05em;">Détails de la course</h4>
+        <p style="margin: 4px 0; font-size: 13px;"><strong>📍 Point de Retrait :</strong> ${pickup}</p>
+        <p style="margin: 4px 0; font-size: 13px;"><strong>🏁 Point de Livraison :</strong> ${delivery}</p>
+        <p style="margin: 4px 0; font-size: 13px;"><strong>📦 Description du Colis :</strong> ${description}</p>
+        <p style="margin: 4px 0; font-size: 13px;"><strong>💰 Forfait :</strong> $5.00 (14 000 FC)</p>
+      </div>
+
+      <p style="font-size: 13px; color: #4b5563;">Vous pouvez suivre la position de votre livreur et l'itinéraire exact en temps réel sur l'application DashMeals.</p>
+      
+      <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+      <p style="font-size: 11px; color: #9ca3af; text-align: center;">DashMeals - Service de Courses Privées Ultra-Rapides.</p>
+    </div>
+  `;
+
+  return sendEmail({
+    to: userEmail,
+    subject: `[DashMeals] Suivi de votre Course Privée #${order.id.slice(0, 8)}`,
+    html
+  });
+};
+

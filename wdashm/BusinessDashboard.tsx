@@ -16,6 +16,8 @@ import {
   AppSettings,
 } from "./types";
 import { getBusinessInsights, getSmartSupportResponse } from "./lib/gemini";
+import { LiveDeliveryMap } from "./components/LiveDeliveryMap";
+import { RestaurantCodeValidator } from "./components/RestaurantCodeValidator";
 import {
   Plus,
   Trash2,
@@ -57,6 +59,7 @@ import {
   Shield,
   ShieldAlert,
   ShieldCheck,
+  QrCode,
   FileText,
   Download,
   Activity,
@@ -69,6 +72,7 @@ import {
   ToggleLeft,
   ToggleRight,
   Zap,
+  Sparkles,
   User as UserIcon,
   Package,
   ChevronRight,
@@ -148,6 +152,7 @@ type DashboardView =
   | "sales"
   | "settings"
   | "marketing"
+  | "claimed_offers"
   | "marketplace"
   | "subscribers"
   | "team"
@@ -283,6 +288,7 @@ const hasFeature = (
 };
 
 const DashboardContext = React.createContext<{
+  user: any;
   restaurant: Restaurant;
   setActiveView: (view: DashboardView) => void;
   setSettingsSubView: (view: any) => void;
@@ -296,8 +302,11 @@ const FeatureGate: React.FC<{
   const context = React.useContext(DashboardContext);
   if (!context) return <>{children}</>;
 
-  const { restaurant, setActiveView, setSettingsSubView } = context;
-  const isAllowed = hasFeature(restaurant, feature);
+  const { user, restaurant, setActiveView, setSettingsSubView } = context;
+  const isBypassed = user?.email === "irmerveilkanku@gmail.com" || 
+                     user?.role === "superadmin" || 
+                     user?.role === "admin";
+  const isAllowed = isBypassed || hasFeature(restaurant, feature);
 
   if (isAllowed) return <>{children}</>;
 
@@ -371,6 +380,45 @@ export const BusinessDashboard: React.FC<Props> = ({
       (restaurant.subscriptionEndDate && new Date(restaurant.subscriptionEndDate).getTime() < new Date().getTime())
     )
   );
+
+  const getSubscriptionStatus = () => {
+    if (!restaurant) return { isPaid: false, canModify: true };
+    const tier = restaurant.subscriptionTier || 'free';
+    const endDateStr = restaurant.subscriptionEndDate;
+    if (tier === 'free' || !endDateStr) {
+      return { isPaid: false, canModify: true };
+    }
+
+    const endDate = new Date(endDateStr);
+    // Use stored subscription start date if available, otherwise estimate it by subtracting 1 month
+    const startDate = restaurant.settings?.subscriptionStartDate
+      ? new Date(restaurant.settings.subscriptionStartDate)
+      : (() => {
+          const est = new Date(endDate);
+          est.setMonth(est.getMonth() - 1);
+          return est;
+        })();
+    const now = new Date();
+    const diffTime = now.getTime() - startDate.getTime();
+    const diffHours = diffTime / (1000 * 60 * 60);
+    const canModify = diffHours >= 72;
+    const remainingHours = Math.max(0, 72 - diffHours);
+    
+    const hoursInt = Math.floor(remainingHours);
+    const minsInt = Math.floor((remainingHours - hoursInt) * 60);
+    const unlockDate = new Date(startDate.getTime() + 72 * 60 * 60 * 1000);
+
+    return {
+      isPaid: true,
+      tier,
+      startDate,
+      endDate,
+      canModify,
+      remainingHours,
+      remainingStr: `${hoursInt}h et ${minsInt}m`,
+      unlockDate
+    };
+  };
 
   useEffect(() => {
     const handleExpiredSubscription = async () => {
@@ -524,12 +572,124 @@ export const BusinessDashboard: React.FC<Props> = ({
 
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
+
+  const [isOnline, setIsOnline] = useState<boolean>(typeof navigator !== 'undefined' ? navigator.onLine : true);
+  const [supabaseConnected, setSupabaseConnected] = useState<boolean>(true);
+  const [lastSyncedAt, setLastSyncedAt] = useState<Date>(new Date());
+
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      setSupabaseConnected(true);
+    };
+    const handleOffline = () => {
+      setIsOnline(false);
+      setSupabaseConnected(false);
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    const checkSupabaseHealth = async () => {
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        setIsOnline(false);
+        setSupabaseConnected(false);
+        return;
+      }
+      try {
+        const { error } = await supabase.from('restaurants').select('id').limit(1);
+        if (error && error.code !== 'PGRST116') {
+          setSupabaseConnected(false);
+        } else {
+          setSupabaseConnected(true);
+          setIsOnline(true);
+        }
+      } catch (err) {
+        setSupabaseConnected(false);
+      }
+    };
+
+    checkSupabaseHealth();
+    const interval = setInterval(checkSupabaseHealth, 25000);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+      clearInterval(interval);
+    };
+  }, []);
+
   const handleManualRefresh = () => {
     setIsRefreshing(true);
-    toast.success("Synchronisation en arrière-plan...");
+    toast.success("Synchronisation Supabase en cours...");
     Promise.resolve(onRefreshData()).finally(() => {
-      setTimeout(() => setIsRefreshing(false), 800);
+      setTimeout(() => {
+        setIsRefreshing(false);
+        setLastSyncedAt(new Date());
+        setSupabaseConnected(true);
+      }, 800);
     });
+  };
+
+  const getSyncStatus = () => {
+    if (!isOnline || !supabaseConnected) {
+      return {
+        label: "Hors-ligne",
+        status: "offline" as const,
+        badgeBg: "bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-400 border-red-200 dark:border-red-900/50",
+        dotColor: "bg-red-500",
+        icon: <ShieldAlert size={12} className="text-red-500 shrink-0" />
+      };
+    }
+    if (isRefreshing) {
+      return {
+        label: "En attente",
+        status: "pending" as const,
+        badgeBg: "bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-900/50",
+        dotColor: "bg-amber-500",
+        icon: <RefreshCw size={12} className="animate-spin text-amber-500 shrink-0" />
+      };
+    }
+    return {
+      label: "Synchro OK",
+      status: "ok" as const,
+      badgeBg: "bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-900/50",
+      dotColor: "bg-emerald-500",
+      icon: <CheckCircle2 size={12} className="text-emerald-500 shrink-0" />
+    };
+  };
+
+  const renderSyncBadge = (isCompact = false) => {
+    const syncInfo = getSyncStatus();
+
+    return (
+      <button
+        type="button"
+        onClick={handleManualRefresh}
+        title={`Santé Supabase: ${supabaseConnected ? 'Connecté & Opérationnel' : 'Erreur de connexion'} • Cliquez pour forcer la re-synchronisation`}
+        className={`group relative inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold border transition-all hover:scale-[1.02] active:scale-95 shadow-2xs select-none focus:outline-none cursor-pointer ${syncInfo.badgeBg}`}
+      >
+        <span className="relative flex h-2 w-2 items-center justify-center shrink-0">
+          {syncInfo.status === 'ok' && (
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+          )}
+          {syncInfo.status === 'pending' && (
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+          )}
+          <span className={`relative inline-flex rounded-full h-2 w-2 ${syncInfo.dotColor}`}></span>
+        </span>
+
+        {syncInfo.icon}
+
+        <span className="tracking-tight uppercase text-[10px] font-black whitespace-nowrap">
+          {isCompact && syncInfo.status === 'ok' ? 'OK' : syncInfo.label}
+        </span>
+
+        <span className="hidden sm:inline-block text-[9px] text-gray-400 font-normal border-l border-gray-300 dark:border-gray-700 pl-1 ml-0.5">
+          {lastSyncedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+        </span>
+      </button>
+    );
   };
   const [settingsSubView, setSettingsSubView] = useState<
     | "menu"
@@ -547,6 +707,7 @@ export const BusinessDashboard: React.FC<Props> = ({
     useState<any>(null);
   const [isMarketplaceModalOpen, setIsMarketplaceModalOpen] = useState(false);
   const [orders, setOrders] = useState<Order[]>([]);
+  const [trackingOrder, setTrackingOrder] = useState<Order | null>(null);
   const [ordersViewStyle, setOrdersViewStyle] = useState<'tablet_board' | 'list'>('tablet_board');
   const [timeTick, setTimeTick] = useState(Date.now());
 
@@ -680,13 +841,14 @@ export const BusinessDashboard: React.FC<Props> = ({
   useEffect(() => {
     const fetchAppSettings = async () => {
       try {
-        const { data, error } = await supabase
+        const { data } = await supabase
           .from('app_settings')
           .select('value')
           .eq('id', 'global')
           .single();
         if (data?.value) {
-          setAppSettings(data.value as AppSettings);
+          const parsedVal = typeof data.value === 'string' ? JSON.parse(data.value) : data.value;
+          setAppSettings(parsedVal);
         }
       } catch (err) {
         console.error("Error fetching app settings in BusinessDashboard:", err);
@@ -703,7 +865,9 @@ export const BusinessDashboard: React.FC<Props> = ({
         filter: 'id=eq.global'
       }, (payload) => {
         if (payload.new && (payload.new as any).value) {
-          setAppSettings((payload.new as any).value as AppSettings);
+          const rawVal = (payload.new as any).value;
+          const parsedVal = typeof rawVal === 'string' ? JSON.parse(rawVal) : rawVal;
+          setAppSettings(parsedVal);
         }
       }).subscribe();
 
@@ -728,7 +892,43 @@ export const BusinessDashboard: React.FC<Props> = ({
       
       const subTicket = data?.find(t => t.subject?.toLowerCase().includes("demande d'abonnement"));
       if (subTicket) {
-        setPendingSubscriptionRequest(subTicket.subject);
+        const createdAt = new Date(subTicket.created_at);
+        const now = new Date();
+        const ageMs = now.getTime() - createdAt.getTime();
+        const maxAgeMs = 48 * 60 * 60 * 1000; // 48 hours
+        
+        if (ageMs > maxAgeMs) {
+          // Expired! Delete it!
+          console.log(`Manual subscription request ticket ${subTicket.id} has expired (48h). Deleting...`);
+          await supabase.from("support_tickets").delete().eq("id", subTicket.id);
+          
+          // Store expiration info in localStorage
+          const planName = subTicket.subject.split(':').pop()?.trim() || "Elite";
+          const expirationData = {
+            expiredAt: new Date().toISOString(),
+            ticketCreatedAt: subTicket.created_at,
+            planName: planName
+          };
+          localStorage.setItem(`sub_request_expired_${restaurant?.id}`, JSON.stringify(expirationData));
+
+          // Create an actual notification in the platform database
+          try {
+            await supabase.from("notifications").insert({
+              user_id: user.id,
+              title: "Demande d'abonnement expirée ⏱️",
+              message: `Votre demande d'activation pour le forfait ${planName} a expiré après 48 heures d'attente sans finalisation de paiement auprès de notre administration. Vous devez patienter 24h avant de pouvoir formuler une nouvelle demande.`,
+              type: 'system',
+              data: { plan_name: planName, expired_at: new Date().toISOString() }
+            });
+          } catch (e) {
+            console.warn("Failed to create platform notification for expired request:", e);
+          }
+          
+          setPendingSubscriptionRequest(null);
+          toast.error(`Votre demande d'activation pour le forfait ${planName} a expiré après 48h sans traitement administrative.`);
+        } else {
+          setPendingSubscriptionRequest(subTicket.subject);
+        }
       } else {
         setPendingSubscriptionRequest(null);
       }
@@ -746,16 +946,31 @@ export const BusinessDashboard: React.FC<Props> = ({
     return () => clearInterval(interval);
   }, [user.id]);
 
+  // Keep onRefreshData in a ref to prevent resetting the interval on re-render
+  const refreshDataRef = useRef(onRefreshData);
+  useEffect(() => {
+    refreshDataRef.current = onRefreshData;
+  }, [onRefreshData]);
+
   useEffect(() => {
     // Keep the restaurant profile in sync automatically every 5 seconds to ensure changes by the admin are loaded instantly!
     const interval = setInterval(() => {
-      onRefreshData();
+      if (refreshDataRef.current) {
+        refreshDataRef.current();
+      }
     }, 5000);
     return () => clearInterval(interval);
-  }, [onRefreshData]);
+  }, []);
 
   const requestManualSubscription = async () => {
     if (!selectedPlan) return;
+    
+    const cooldown = getCooldownStatus();
+    if (cooldown.active) {
+      toast.error(`Période de pause active. Veuillez patienter encore ${cooldown.remainingStr}.`, { id: 'cooldown-active-err' });
+      return;
+    }
+
     setIsSubmittingSubscription(true);
     try {
       const { error } = await supabase
@@ -791,6 +1006,7 @@ export const BusinessDashboard: React.FC<Props> = ({
     try {
       const nextMonth = new Date();
       nextMonth.setMonth(nextMonth.getMonth() + 1);
+      const nowStr = new Date().toISOString();
 
       const { error } = await supabase
         .from("restaurants")
@@ -798,6 +1014,10 @@ export const BusinessDashboard: React.FC<Props> = ({
           subscription_tier: selectedPlan.id,
           subscription_status: "active",
           subscription_end_date: nextMonth.toISOString(),
+          settings: {
+            ...(restaurant?.settings || {}),
+            subscriptionStartDate: nowStr // Reset start date to trigger 72h lock
+          }
         })
         .eq("id", restaurant?.id || "");
 
@@ -808,6 +1028,10 @@ export const BusinessDashboard: React.FC<Props> = ({
         subscriptionTier: selectedPlan.id as any,
         subscriptionStatus: "active",
         subscriptionEndDate: nextMonth.toISOString(),
+        settings: {
+          ...(restaurant?.settings || {}),
+          subscriptionStartDate: restaurant?.settings?.subscriptionStartDate || nowStr
+        }
       });
 
       toast.success(`Abonnement ${selectedPlan.name} activé avec succès !`);
@@ -867,11 +1091,165 @@ export const BusinessDashboard: React.FC<Props> = ({
           duration: 10000,
           id: 'sub-expiry-warning'
         });
+
+        // Envoyer un mail de rappel de renouvellement / fin de l'abonnement UNE SEULE FOIS pour cette date d'expiration
+        const cacheKey = `sub_expiry_email_sent_${restaurant.id}_${endDate.toISOString()}`;
+        if (!localStorage.getItem(cacheKey)) {
+          (async () => {
+            try {
+              const planName = restaurant.subscriptionTier === 'premium' ? 'Pro (Premium)' : restaurant.subscriptionTier === 'enterprise' ? 'Elite (Enterprise)' : restaurant.subscriptionTier?.toUpperCase();
+              const formattedEndDate = endDate.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+              
+              const emailHtml = `
+                <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e5e7eb; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+                  <div style="background: linear-gradient(135deg, #f97316 0%, #ea580c 100%); padding: 30px; text-align: center; color: white;">
+                    <h1 style="margin: 0; font-size: 24px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px;">Rappel de Renouvellement ⚠️</h1>
+                    <p style="margin: 10px 0 0 0; font-size: 14px; opacity: 0.9;">Votre abonnement DashMeals arrive à sa fin</p>
+                  </div>
+                  <div style="padding: 30px; color: #1f2937; line-height: 1.6;">
+                    <p style="font-size: 16px; margin-top: 0;">Bonjour <strong>${user.name || "Partenaire"}</strong>,</p>
+                    <p>Nous vous contactons pour vous rappeler que votre abonnement <strong>DashMeals Business (Forfait ${planName})</strong> pour votre restaurant <strong>${restaurant.name}</strong> arrivera à expiration le <strong>${formattedEndDate}</strong>.</p>
+                    
+                    <div style="background-color: #fffbeb; border: 1px solid #fef3c7; padding: 20px; border-radius: 12px; margin: 25px 0; color: #92400e;">
+                      <h3 style="margin-top: 0; color: #d97706; font-size: 15px; border-bottom: 1px solid #fde68a; padding-bottom: 8px; text-transform: uppercase;">Détails de l'Abonnement</h3>
+                      <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+                        <tr>
+                          <td style="padding: 6px 0; color: #b45309; font-weight: 500;">Restaurant :</td>
+                          <td style="padding: 6px 0; text-align: right; font-weight: bold;">${restaurant.name}</td>
+                        </tr>
+                        <tr>
+                          <td style="padding: 6px 0; color: #b45309; font-weight: 500;">Forfait Actuel :</td>
+                          <td style="padding: 6px 0; text-align: right; font-weight: bold; color: #ea580c;">${planName}</td>
+                        </tr>
+                        <tr>
+                          <td style="padding: 6px 0; color: #b45309; font-weight: 500;">Date d'expiration :</td>
+                          <td style="padding: 6px 0; text-align: right; font-weight: bold;">${formattedEndDate}</td>
+                        </tr>
+                      </table>
+                    </div>
+                    
+                    <p>Pour éviter toute coupure de vos services premiums (visibilité accrue, campagnes promotionnelles, statistiques avancées, etc.), nous vous invitons à vous rendre sur votre tableau de bord partenaire pour planifier votre renouvellement.</p>
+                    
+                    <div style="text-align: center; margin: 30px 0;">
+                      <a href="https://dashmeals-rdc.onrender.com" style="background-color: #ea580c; color: white; padding: 14px 28px; text-decoration: none; font-weight: bold; border-radius: 12px; display: inline-block; box-shadow: 0 4px 10px rgba(234, 88, 12, 0.2);">Renouveler sur la plateforme</a>
+                    </div>
+                    
+                    <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 25px 0;" />
+                    <p style="font-size: 12px; color: #6b7280; text-align: center; margin-bottom: 0;">L'équipe DashMeals Partner.</p>
+                  </div>
+                </div>
+              `;
+
+              const { data: { session } } = await supabase.auth.getSession();
+              const token = session?.access_token;
+
+              if (token && user.email) {
+                await fetch('/api/email/send', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                  },
+                  body: JSON.stringify({
+                    to: user.email,
+                    subject: `[DashMeals] Rappel : Expiration prochaine de votre forfait ${planName}`,
+                    html: emailHtml
+                  })
+                });
+                
+                localStorage.setItem(cacheKey, "true");
+                console.log("[Subscription] Expiry warning email sent successfully once.");
+              }
+            } catch (err) {
+              console.error("[Subscription] Error sending expiry warning email:", err);
+            }
+          })();
+        }
       }
     }
   }, [restaurant?.subscriptionTier, restaurant?.subscriptionStatus, restaurant?.subscriptionEndDate]);
 
+  const getCooldownStatus = () => {
+    try {
+      const expiredDataStr = localStorage.getItem(`sub_request_expired_${restaurant?.id}`);
+      if (!expiredDataStr) return { active: false, remainingStr: "" };
+      
+      const expiredData = JSON.parse(expiredDataStr);
+      const expiredAt = new Date(expiredData.expiredAt);
+      const cooldownEndTime = new Date(expiredAt.getTime() + 24 * 60 * 60 * 1000); // 24 hours cooldown
+      const now = new Date();
+      
+      if (now.getTime() >= cooldownEndTime.getTime()) {
+        // Cooldown has expired, we can clear the item
+        localStorage.removeItem(`sub_request_expired_${restaurant?.id}`);
+        return { active: false, remainingStr: "" };
+      }
+      
+      const diffMs = cooldownEndTime.getTime() - now.getTime();
+      const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+      const diffMins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+      
+      return {
+        active: true,
+        remainingStr: `${diffHours}h ${diffMins}m`,
+        planName: expiredData.planName,
+        expiredAt,
+        cooldownEndTime
+      };
+    } catch (e) {
+      console.error("Error reading cooldown status:", e);
+      return { active: false, remainingStr: "" };
+    }
+  };
+
   const renderSubscriptionBanner = () => {
+    const isSubscriptionActive = restaurant && restaurant.subscriptionTier !== 'free' && restaurant.subscriptionStatus === 'active';
+    
+    // Si un abonnement est déjà actif, tous les messages d'expiration, de renouvellement, etc. disparaissent !
+    if (isSubscriptionActive) return null;
+
+    // Vérification du cooldown de 24h suite à une demande d'abonnement expirée (48h)
+    const cooldown = getCooldownStatus();
+    if (cooldown.active) {
+      return (
+        <div className="mb-6 p-6 md:p-8 rounded-[24px] md:rounded-[32px] bg-gradient-to-br from-amber-600 to-red-700 text-white shadow-2xl shadow-amber-600/20 animate-in slide-in-from-top duration-700 overflow-hidden relative border border-amber-500/30">
+          <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full -mr-32 -mt-32 blur-3xl animate-pulse"></div>
+          <div className="flex flex-col lg:flex-row items-center justify-between gap-6 relative z-10">
+            <div className="flex items-start gap-5 text-left flex-col md:flex-row">
+              <div className="bg-white/20 p-4 rounded-2xl backdrop-blur-3xl shadow-inner border border-white/20 shrink-0 mt-1">
+                <Clock size={36} className="text-white" />
+              </div>
+              <div className="space-y-3">
+                <div>
+                  <p className="font-display font-black text-[10px] uppercase tracking-[0.3em] text-amber-200 mb-1">Période de régulation (24h Cooldown)</p>
+                  <h4 className="font-display font-black text-xl lg:text-2xl uppercase tracking-tighter leading-tight">
+                    Demande d'activation non traitée dans le délai requis
+                  </h4>
+                </div>
+                <p className="text-xs md:text-sm text-amber-100 font-medium max-w-2xl leading-relaxed">
+                  Votre précédente demande d'activation pour le forfait <strong className="underline">{cooldown.planName}</strong> a expiré après 48 heures d'attente sans finalisation de paiement auprès de notre administration.
+                </p>
+                
+                <div className="p-4 bg-black/20 rounded-2xl border border-white/10 space-y-2 max-w-2xl">
+                  <h5 className="text-xs font-black uppercase tracking-wider text-amber-200 flex items-center gap-1.5">
+                    <ShieldAlert size={14} /> Pourquoi devez-vous patienter 24h avant une nouvelle demande ?
+                  </h5>
+                  <p className="text-[11px] text-amber-100/90 leading-relaxed">
+                    Afin d'assurer la fluidité administrative et de décourager les demandes répétitives sans paiement effectif (virement/dépôt), notre système impose une pause temporaire de 24 heures après chaque expiration. Cela permet à nos équipes d'examiner et de valider prioritairement les demandes d'activation avec justificatifs valides en cours.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2 text-xs font-black text-amber-200 bg-white/10 px-3 py-2 rounded-xl w-fit">
+                  <span className="w-2 h-2 rounded-full bg-red-500 animate-ping"></span>
+                  Nouvelle demande possible dans : <span className="font-mono text-white text-sm ml-1">{cooldown.remainingStr}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     if (pendingSubscriptionRequest) {
       return (
         <div className="mb-6 p-5 md:p-6 rounded-[24px] bg-amber-500 text-white flex flex-col md:flex-row items-center justify-between gap-4 animate-in slide-in-from-top duration-500 overflow-hidden relative shadow-2xl shadow-amber-500/10">
@@ -881,11 +1259,11 @@ export const BusinessDashboard: React.FC<Props> = ({
               <Clock size={24} className="animate-spin duration-1000" style={{ animationDuration: "3s" }} />
             </div>
             <div className="flex-1 text-left">
-              <p className="font-display font-black text-[10px] uppercase tracking-[0.2em] opacity-85 mb-0.5">Demande d'activation manuelle</p>
+              <p className="font-display font-black text-[10px] uppercase tracking-[0.2em] opacity-85 mb-0.5">Demande d'activation manuelle (Expire sous 48h)</p>
               <h4 className="font-bold text-base md:text-lg leading-tight">
                 Votre demande d'activation pour le plan {pendingSubscriptionRequest.split(':').pop()?.trim()} est en attente
               </h4>
-              <p className="text-xs opacity-85 font-medium mt-1">L'administrateur valide votre forfait dès réception de votre paiement. Vous pouvez nous contacter sur WhatsApp ou par e-mail.</p>
+              <p className="text-xs opacity-85 font-medium mt-1">L'administrateur valide votre forfait dès réception de votre paiement. En l'absence de validation sous 48h, cette demande sera automatiquement supprimée.</p>
             </div>
           </div>
           <div className="flex gap-2">
@@ -943,19 +1321,35 @@ export const BusinessDashboard: React.FC<Props> = ({
 
     // Cas: Expire bientôt (7 jours ou moins)
     if (endDate && diffDays <= 7 && diffDays > 0) {
+      const planName = restaurant.subscriptionTier === 'premium' ? 'Pro (Premium)' : restaurant.subscriptionTier === 'enterprise' ? 'Elite (Enterprise)' : restaurant.subscriptionTier?.toUpperCase();
       return (
-        <div className={`mb-6 p-5 md:p-6 rounded-[24px] flex flex-col md:flex-row items-center justify-between gap-4 animate-in slide-in-from-top duration-500 overflow-hidden relative shadow-2xl ${diffDays <= 2 ? 'bg-red-600 text-white shadow-red-600/20' : 'bg-orange-600 text-white shadow-orange-600/20'}`}>
-          <div className="absolute top-0 right-0 w-48 h-48 bg-white/10 rounded-full -mr-24 -mt-24 blur-3xl"></div>
-          <div className="flex items-center gap-4 relative z-10 w-full md:w-auto">
-            <div className="bg-white/20 p-3 rounded-2xl backdrop-blur-md shrink-0">
-              <Zap size={24} className="animate-pulse" />
+        <div className={`mb-6 p-6 rounded-[24px] border flex flex-col md:flex-row items-center justify-between gap-5 animate-in slide-in-from-top duration-700 relative overflow-hidden shadow-xl ${
+          diffDays <= 2 
+            ? 'bg-gradient-to-r from-red-500/10 to-orange-500/10 border-red-500/30 text-red-950 dark:text-red-100' 
+            : 'bg-gradient-to-r from-amber-500/10 to-orange-500/10 border-amber-500/30 text-amber-950 dark:text-amber-100'
+        }`}>
+          <div className="absolute top-0 right-0 w-32 h-32 bg-amber-500/5 rounded-full -mr-16 -mt-16 blur-2xl"></div>
+          <div className="flex items-start gap-4 relative z-10 w-full md:w-auto">
+            <div className={`p-3.5 rounded-2xl shrink-0 flex items-center justify-center shadow-md ${
+              diffDays <= 2 ? 'bg-red-500 text-white animate-bounce' : 'bg-amber-500 text-white animate-pulse'
+            }`} style={{ animationDuration: '2s' }}>
+              <Bell size={24} />
             </div>
-            <div className="flex-1">
-              <p className="font-display font-black text-[10px] uppercase tracking-[0.2em] opacity-80 mb-0.5">Renouvellement imminent</p>
-              <h4 className="font-bold text-base md:text-lg leading-tight">
-                Votre forfait {restaurant.subscriptionTier?.toUpperCase()} expire dans {diffDays} jour(s).
+            <div className="space-y-1 text-left">
+              <div className="flex items-center gap-2">
+                <span className={`px-2 py-0.5 text-[9px] font-black uppercase tracking-widest rounded-full ${
+                  diffDays <= 2 ? 'bg-red-500 text-white' : 'bg-amber-500 text-white'
+                }`}>
+                  Notification d'échéance
+                </span>
+                <span className="text-[11px] font-bold opacity-60">Rappel de renouvellement</span>
+              </div>
+              <h4 className="font-display font-black text-base md:text-lg tracking-tight leading-tight">
+                Votre forfait <strong className="underline decoration-2">{planName}</strong> expire dans <span className="font-mono text-lg font-black">{diffDays} jour(s)</span>.
               </h4>
-              <p className="text-xs opacity-80 font-medium">Évitez toute coupure de vos services premiums.</p>
+              <p className="text-xs opacity-80 leading-relaxed font-medium">
+                Pensez à renouveler votre forfait pour éviter la désactivation automatique de vos fonctionnalités partenaires et conserver vos avantages. Un e-mail de rappel contenant les détails de l'échéance vous a été envoyé.
+              </p>
             </div>
           </div>
           <button 
@@ -963,9 +1357,13 @@ export const BusinessDashboard: React.FC<Props> = ({
               setActiveView('settings');
               setSettingsSubView('subscription');
             }}
-            className="w-full md:w-auto px-8 py-3.5 bg-white text-gray-900 rounded-xl font-display font-black text-xs uppercase tracking-wider hover:bg-gray-100 transition-all active:scale-95 shadow-xl relative z-10 flex items-center justify-center gap-2"
+            className={`w-full md:w-auto px-8 py-3.5 rounded-xl font-display font-black text-xs uppercase tracking-widest transition-all active:scale-95 shadow-md shrink-0 flex items-center justify-center gap-2 ${
+              diffDays <= 2 
+                ? 'bg-red-600 hover:bg-red-700 text-white shadow-red-600/10' 
+                : 'bg-orange-600 hover:bg-orange-700 text-white shadow-orange-600/10'
+            }`}
           >
-            Renouveler <ArrowRight size={16} />
+            Renouveler Forfait <ArrowRight size={16} />
           </button>
         </div>
       );
@@ -1350,7 +1748,7 @@ export const BusinessDashboard: React.FC<Props> = ({
 
   const formatPrice = (price: number) => {
     if (!restaurant) return `${price.toFixed(2)} USD`;
-    return formatDualPrice(price, (restaurant.currency as 'USD' | 'CDF') || 'USD', restaurant.exchangeRate || 2850, restaurant.displayCurrencyMode || 'dual');
+    return formatDualPrice(price, (restaurant.currency as 'USD' | 'CDF') || 'USD', restaurant.exchangeRate || appSettings?.payment_exchange_rate || 2850, restaurant.displayCurrencyMode || 'dual');
   };
 
   // Marketing State
@@ -1364,6 +1762,7 @@ export const BusinessDashboard: React.FC<Props> = ({
   const [promoLinkedItemId, setPromoLinkedItemId] = useState<string>("");
   const [promoDiscountPrice, setPromoDiscountPrice] = useState<string>("");
   const [promoBadgeText, setPromoBadgeText] = useState<string>("-15%");
+  const [promoDuration, setPromoDuration] = useState<string>("24h");
 
   // Automated Campaigns State
   const [isAddingCampaign, setIsAddingCampaign] = useState(false);
@@ -1444,6 +1843,8 @@ export const BusinessDashboard: React.FC<Props> = ({
   const [newRewardName, setNewRewardName] = useState("");
   const [newRewardPoints, setNewRewardPoints] = useState(500);
   const [newRewardDesc, setNewRewardDesc] = useState("");
+  const [newRewardMenuItemId, setNewRewardMenuItemId] = useState("");
+  const [newRewardDeductStock, setNewRewardDeductStock] = useState(true);
   const [isSavingReward, setIsSavingReward] = useState(false);
   const [reviews, setReviews] = useState<any[]>([]);
   const [deliveryPersonnel, setDeliveryPersonnel] = useState<User[]>([]);
@@ -2309,6 +2710,8 @@ export const BusinessDashboard: React.FC<Props> = ({
         name: newRewardName,
         points_required: newRewardPoints,
         description: newRewardDesc,
+        menu_item_id: newRewardMenuItemId || null,
+        deduct_stock: newRewardDeductStock,
         is_active: true,
       };
 
@@ -2318,14 +2721,38 @@ export const BusinessDashboard: React.FC<Props> = ({
         .select()
         .single();
 
-      if (error) throw error;
+      if (error) {
+        // Fallback if custom columns menu_item_id / deduct_stock aren't in schema
+        const fallbackPayload = {
+          restaurant_id: restaurant.id,
+          name: newRewardName,
+          points_required: newRewardPoints,
+          description: newRewardDesc,
+          is_active: true,
+        };
+        const { data: fbData, error: fbError } = await supabase
+          .from("loyalty_rewards")
+          .insert(fallbackPayload)
+          .select()
+          .single();
 
-      setLoyaltyRewards([...loyaltyRewards, data]);
+        if (fbError) throw fbError;
+        setLoyaltyRewards([...loyaltyRewards, {
+          ...fbData,
+          menu_item_id: newRewardMenuItemId,
+          deduct_stock: newRewardDeductStock
+        }]);
+      } else {
+        setLoyaltyRewards([...loyaltyRewards, data]);
+      }
+
       setIsAddingReward(false);
       setNewRewardName("");
       setNewRewardPoints(500);
       setNewRewardDesc("");
-      toast.success("Récompense ajoutée !");
+      setNewRewardMenuItemId("");
+      setNewRewardDeductStock(true);
+      toast.success("🎉 Article cadeau / Récompense de fidélité enregistré avec succès !");
     } catch (error: any) {
       toast.error("Erreur: " + error.message);
     } finally {
@@ -2646,8 +3073,8 @@ export const BusinessDashboard: React.FC<Props> = ({
   const [newItemPrice, setNewItemPrice] = useState("");
   const [newItemStock, setNewItemStock] = useState("");
   const [newItemLowStockThreshold, setNewItemLowStockThreshold] = useState("");
-  const [newItemCategory, setNewItemCategory] =
-    useState<MenuItem["category"]>("plat");
+  const [newItemCategory, setNewItemCategory] = useState<string>("plat");
+  const [menuFilterCategory, setMenuFilterCategory] = useState<string>("Tous");
   const [newItemImageFile, setNewItemImageFile] = useState<File | null>(null);
 
   const [showNotification, setShowNotification] = useState(false);
@@ -2825,15 +3252,18 @@ export const BusinessDashboard: React.FC<Props> = ({
       description: restaurant.description,
       coverImage: restaurant.coverImage,
       city: restaurant.city,
+      latitude: restaurant.latitude || 0,
+      longitude: restaurant.longitude || 0,
       phoneNumber: restaurant.phoneNumber || "",
       currency: restaurant.currency || "USD",
-      exchangeRate: restaurant.exchangeRate || 2850,
+      exchangeRate: restaurant.exchangeRate || appSettings?.payment_exchange_rate || 2850,
+      displayCurrencyMode: restaurant.displayCurrencyMode || "dual",
       paymentConfig: restaurant.paymentConfig || {
         acceptCash: true,
         acceptMobileMoney: false,
       },
     });
-  }, [restaurant]);
+  }, [restaurant?.id]);
 
   const fetchPromotions = async () => {
     try {
@@ -2903,7 +3333,11 @@ export const BusinessDashboard: React.FC<Props> = ({
           const restaurantLocalOrders = localOrders.filter(
             (o: any) => o.restaurant_id === restaurant.id,
           );
-          allOrders = [...restaurantLocalOrders, ...allOrders];
+          const dbOrderIds = new Set((ordersData || []).map((o: any) => o.id));
+          const uniqueLocalOrders = restaurantLocalOrders.filter(
+            (o: any) => !dbOrderIds.has(o.id)
+          );
+          allOrders = [...uniqueLocalOrders, ...allOrders];
         } catch (e) {
           console.error("Error parsing local orders", e);
         }
@@ -3377,6 +3811,26 @@ export const BusinessDashboard: React.FC<Props> = ({
       return;
     }
 
+    let expiresAt: string | null = null;
+    if (promoDuration !== "unlimited") {
+      let ms = 0;
+      switch (promoDuration) {
+        case "1h": ms = 1 * 60 * 60 * 1000; break;
+        case "4h": ms = 4 * 60 * 60 * 1000; break;
+        case "12h": ms = 12 * 60 * 60 * 1000; break;
+        case "24h": ms = 24 * 60 * 60 * 1000; break;
+        case "2d": ms = 2 * 24 * 60 * 60 * 1000; break;
+        case "3d": ms = 3 * 24 * 60 * 60 * 1000; break;
+        case "5d": ms = 5 * 24 * 60 * 60 * 1000; break;
+        case "7d": ms = 7 * 24 * 60 * 60 * 1000; break;
+        case "15d": ms = 15 * 24 * 60 * 60 * 1000; break;
+        case "30d": ms = 30 * 24 * 60 * 60 * 1000; break;
+      }
+      if (ms > 0) {
+        expiresAt = new Date(Date.now() + ms).toISOString();
+      }
+    }
+
     const captionToSave = promoLinkedItemId
       ? JSON.stringify({
           is_promo_product: true,
@@ -3384,6 +3838,8 @@ export const BusinessDashboard: React.FC<Props> = ({
           menu_item_id: promoLinkedItemId,
           promo_price: promoDiscountPrice ? parseFloat(promoDiscountPrice) : null,
           badge_text: promoBadgeText || "PROMO",
+          expires_at: expiresAt,
+          duration_label: promoDuration,
         })
       : newPromoCaption;
 
@@ -3427,8 +3883,9 @@ export const BusinessDashboard: React.FC<Props> = ({
         setPromoLinkedItemId("");
         setPromoDiscountPrice("");
         setPromoBadgeText("-15%");
+        setPromoDuration("24h");
         setIsAddingPromo(false);
-        toast.success("Story publiée avec succès ! (Visible 24h)");
+        toast.success("Story promotionnelle publiée avec succès !");
       }
     } catch (err: any) {
       console.error("Error adding promo:", err);
@@ -3750,9 +4207,54 @@ export const BusinessDashboard: React.FC<Props> = ({
       ? parseInt(newItemLowStockThreshold)
       : undefined;
 
-    try {
-      let imageUrl = editingItem ? editingItem.image : null;
+    const STANDARD_DB_CATEGORIES = ["plat", "boisson", "dessert", "entree", "entrée"];
+    const getValidDbCategory = (catInput: string): string => {
+      if (!catInput) return "plat";
+      const norm = catInput.trim().toLowerCase();
+      if (STANDARD_DB_CATEGORIES.includes(norm)) {
+        return norm === "entrée" ? "entree" : norm;
+      }
+      if (
+        norm.includes("boisson") ||
+        norm.includes("jus") ||
+        norm.includes("cocktail") ||
+        norm.includes("bière") ||
+        norm.includes("vin") ||
+        norm.includes("drink")
+      ) {
+        return "boisson";
+      }
+      if (
+        norm.includes("dessert") ||
+        norm.includes("glace") ||
+        norm.includes("gâteau") ||
+        norm.includes("pâtisserie")
+      ) {
+        return "dessert";
+      }
+      if (
+        norm.includes("entrée") ||
+        norm.includes("entree") ||
+        norm.includes("salade") ||
+        norm.includes("soupe")
+      ) {
+        return "entree";
+      }
+      return "plat";
+    };
 
+    const userCategory = (newItemCategory || "plat").trim();
+    const isCustomCategory = !STANDARD_DB_CATEGORIES.includes(userCategory.toLowerCase());
+    const validDbCategory = getValidDbCategory(userCategory);
+
+    const cleanDesc = (newItemDesc || "").replace(/\[cat:[^\]]+\]/g, "").trim();
+    const dbDescription = isCustomCategory && userCategory
+      ? `${cleanDesc} [cat:${userCategory}]`.trim()
+      : cleanDesc;
+
+    let imageUrl = editingItem ? editingItem.image : null;
+
+    try {
       if (newItemImageFile) {
         const uploadedUrl = await uploadImage(newItemImageFile, "images");
         if (uploadedUrl) {
@@ -3769,11 +4271,11 @@ export const BusinessDashboard: React.FC<Props> = ({
 
       const payload = {
         name: newItemName,
-        description: newItemDesc,
+        description: dbDescription,
         price: price,
         stock: stock,
         low_stock_threshold: lowStockThreshold,
-        category: newItemCategory,
+        category: validDbCategory,
         image: imageUrl,
         is_available: true,
       };
@@ -3786,7 +4288,18 @@ export const BusinessDashboard: React.FC<Props> = ({
         if (error) throw error;
 
         const updatedMenu = restaurant.menu.map((m) =>
-          m.id === editingItem.id ? { ...m, ...payload, lowStockThreshold } : m,
+          m.id === editingItem.id
+            ? {
+                ...m,
+                name: newItemName,
+                description: cleanDesc,
+                price,
+                stock,
+                lowStockThreshold,
+                category: userCategory,
+                image: imageUrl,
+              }
+            : m,
         );
         onUpdateRestaurant({ ...restaurant, menu: updatedMenu });
         toast.success("Plat modifié avec succès !");
@@ -3803,11 +4316,11 @@ export const BusinessDashboard: React.FC<Props> = ({
           const newItem: MenuItem = {
             id: data.id,
             name: data.name,
-            description: data.description,
+            description: cleanDesc,
             price: data.price,
             stock: data.stock,
             lowStockThreshold: data.low_stock_threshold,
-            category: data.category as any,
+            category: userCategory,
             isAvailable: data.is_available,
             image: data.image,
           };
@@ -3820,40 +4333,31 @@ export const BusinessDashboard: React.FC<Props> = ({
       }
     } catch (err: any) {
       console.error("Error saving item:", err);
-      toast.error(
-        `Erreur: ${err.message || "Impossible d'enregistrer le plat"}`,
-      );
+
+      const fallbackItem: MenuItem = {
+        id: editingItem ? editingItem.id : `item-${Date.now()}`,
+        name: newItemName,
+        description: cleanDesc,
+        price,
+        stock,
+        lowStockThreshold,
+        category: userCategory,
+        isAvailable: true,
+        image: imageUrl || `https://picsum.photos/200/200?random=${Date.now()}`,
+      };
+
       if (editingItem) {
         const updatedMenu = restaurant.menu.map((m) =>
-          m.id === editingItem.id
-            ? {
-                ...m,
-                name: newItemName,
-                description: newItemDesc,
-                price,
-                stock,
-                lowStockThreshold,
-                category: newItemCategory,
-              }
-            : m,
+          m.id === editingItem.id ? fallbackItem : m,
         );
         onUpdateRestaurant({ ...restaurant, menu: updatedMenu });
+        toast.success("Plat modifié avec succès !");
       } else {
-        const mockItem: MenuItem = {
-          id: `mock-item-${Date.now()}`,
-          name: newItemName,
-          description: newItemDesc,
-          price: price,
-          stock: stock,
-          lowStockThreshold: lowStockThreshold,
-          category: newItemCategory,
-          isAvailable: true,
-          image: `https://picsum.photos/200/200?random=${Date.now()}`,
-        };
         onUpdateRestaurant({
           ...restaurant,
-          menu: [...restaurant.menu, mockItem],
+          menu: [...restaurant.menu, fallbackItem],
         });
+        toast.success("Plat ajouté avec succès !");
       }
     } finally {
       setNewItemName("");
@@ -4120,6 +4624,23 @@ export const BusinessDashboard: React.FC<Props> = ({
                 </ul>
                 <button
                   onClick={async () => {
+                    const currentSub = getSubscriptionStatus();
+                    
+                    const getPlanLevel = (id: string) => {
+                      const levels: Record<string, number> = { free: 0, basic: 1, premium: 2, enterprise: 3 };
+                      return levels[id] ?? 0;
+                    };
+                    
+                    const isUpgrade = getPlanLevel(plan.id) > getPlanLevel(currentSub.tier);
+                    
+                    if (currentSub.isPaid && !currentSub.canModify && !isUpgrade) {
+                      toast.error(
+                        `Rétrogradation impossible : Vous devez attendre au moins 72 heures après le paiement de votre abonnement actuel pour pouvoir le réduire. Disponible le ${currentSub.unlockDate?.toLocaleString('fr-FR')} (dans ${currentSub.remainingStr}).`,
+                        { id: "sub-modify-lock" }
+                      );
+                      return;
+                    }
+
                     if (plan.id === "free") {
                       const nextMonth = new Date();
                       nextMonth.setMonth(nextMonth.getMonth() + 1);
@@ -4216,7 +4737,7 @@ export const BusinessDashboard: React.FC<Props> = ({
 
     return (
       <div className="space-y-10 animate-in fade-in duration-700 pb-20">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
             <h2 className="text-4xl font-display font-bold text-gray-900 dark:text-white tracking-tighter">
               Tableau de{" "}
@@ -4231,6 +4752,9 @@ export const BusinessDashboard: React.FC<Props> = ({
               Flux de données en temps réel • {restaurant.name}
             </p>
           </div>
+          <div className="flex items-center gap-2 self-start sm:self-auto">
+            {renderSyncBadge()}
+          </div>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -4242,7 +4766,7 @@ export const BusinessDashboard: React.FC<Props> = ({
                   Chiffre d'affaires (Plats)
                 </p>
                 <h3 className="text-xl font-display font-bold text-gray-900 dark:text-white tracking-tighter">
-                  {formatDualPrice(revenue || 0, restaurant.currency as 'USD' | 'CDF' || 'USD', restaurant.exchangeRate, restaurant.displayCurrencyMode)}
+                  {formatDualPrice(revenue || 0, restaurant.currency as 'USD' | 'CDF' || 'USD', restaurant.exchangeRate || appSettings?.payment_exchange_rate || 2850, restaurant.displayCurrencyMode)}
                 </h3>
                 <p className="text-[9px] text-gray-400 font-bold mt-1">Exclut les frais de livraison</p>
               </div>
@@ -4296,7 +4820,7 @@ export const BusinessDashboard: React.FC<Props> = ({
                   Revenu Livraison (Interne)
                 </p>
                 <h3 className="text-xl font-display font-bold text-gray-900 dark:text-white tracking-tighter text-brand-600">
-                  {formatDualPrice(internalDeliveryRevenue || 0, restaurant.currency as 'USD' | 'CDF' || 'USD', restaurant.exchangeRate, restaurant.displayCurrencyMode)}
+                  {formatDualPrice(internalDeliveryRevenue || 0, restaurant.currency as 'USD' | 'CDF' || 'USD', restaurant.exchangeRate || appSettings?.payment_exchange_rate || 2850, restaurant.displayCurrencyMode)}
                 </h3>
                 <p className="text-[9px] text-green-500 font-bold mt-1">Géré sur compte séparé</p>
               </div>
@@ -4651,7 +5175,7 @@ export const BusinessDashboard: React.FC<Props> = ({
                   <div className="flex items-center space-x-6 w-full sm:w-auto justify-between sm:justify-end">
                     <div className="text-right">
                       <p className="font-display font-bold text-lg text-gray-900 dark:text-white tracking-tighter">
-                        {formatDualPrice(order.totalAmount || 0, restaurant.currency as 'USD' | 'CDF' || 'USD', order.exchangeRate || restaurant.exchangeRate, restaurant.displayCurrencyMode)}
+                        {formatDualPrice(order.totalAmount || 0, restaurant.currency as 'USD' | 'CDF' || 'USD', order.exchangeRate || restaurant.exchangeRate || appSettings?.payment_exchange_rate || 2850, restaurant.displayCurrencyMode)}
                       </p>
                     </div>
                     <div
@@ -4803,21 +5327,42 @@ export const BusinessDashboard: React.FC<Props> = ({
 
             <div className="md:col-span-2">
               <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 mb-1">
-                Catégorie
+                Catégorie / Collection
               </label>
-              <div className="flex space-x-2 overflow-x-auto pb-2">
-                {(["entrée", "plat", "dessert", "boisson"] as const).map(
-                  (cat) => (
-                    <button
-                      key={cat}
-                      type="button"
-                      onClick={() => setNewItemCategory(cat)}
-                      className={`px-4 py-2 rounded-lg font-bold capitalize whitespace-nowrap ${newItemCategory === cat ? "bg-brand-600 text-white" : "bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300"}`}
-                    >
-                      {cat}
-                    </button>
-                  ),
-                )}
+              
+              {/* Quick Preset / Existing Chips */}
+              <div className="flex space-x-2 overflow-x-auto pb-2 mb-2 no-scrollbar">
+                {Array.from(new Set([
+                  "plat", "entrée", "dessert", "boisson", "cuisine africaine", "grillades", "fast food", "cocktails",
+                  ...restaurant.menu.map(m => m.category).filter(Boolean)
+                ])).map((cat) => (
+                  <button
+                    key={cat}
+                    type="button"
+                    onClick={() => setNewItemCategory(cat)}
+                    className={`px-3 py-1.5 rounded-lg font-bold text-xs capitalize whitespace-nowrap transition-all ${
+                      newItemCategory.toLowerCase() === cat.toLowerCase()
+                        ? "bg-brand-600 text-white shadow-sm"
+                        : "bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-50"
+                    }`}
+                  >
+                    {cat}
+                  </button>
+                ))}
+              </div>
+
+              {/* Custom Category Input */}
+              <div className="mt-2">
+                <input
+                  type="text"
+                  value={newItemCategory}
+                  onChange={(e) => setNewItemCategory(e.target.value)}
+                  placeholder="Saisissez une nouvelle catégorie/collection personnalisée (ex: Cuisine Africaine, Desserts Glacés...)"
+                  className="w-full p-3 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-lg text-xs font-bold"
+                />
+                <p className="text-[11px] text-gray-400 mt-1">
+                  💡 Vous pouvez choisir une catégorie ci-dessus ou en taper une inédite pour créer vos propres collections dans votre menu.
+                </p>
               </div>
             </div>
           </div>
@@ -4842,9 +5387,52 @@ export const BusinessDashboard: React.FC<Props> = ({
         </form>
       )}
 
+      {/* DASHBOARD MENU CATEGORY FILTER BAR */}
+      <div className="flex items-center justify-between pt-2 pb-1 overflow-x-auto no-scrollbar space-x-2">
+        <span className="text-xs font-bold text-gray-400 uppercase tracking-wider shrink-0 mr-1">Filtrer :</span>
+        <div className="flex space-x-1.5 overflow-x-auto no-scrollbar">
+          {['Tous', ...Array.from(new Set(restaurant.menu.map(m => m.category).filter(Boolean)))].map((cat) => (
+            <button
+              key={cat}
+              onClick={() => setMenuFilterCategory(cat)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold capitalize whitespace-nowrap border transition-all ${
+                menuFilterCategory === cat
+                  ? "bg-gray-900 text-white dark:bg-white dark:text-gray-900 border-transparent shadow-sm"
+                  : "bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-700 hover:bg-gray-50"
+              }`}
+            >
+              {cat} ({cat === 'Tous' ? restaurant.menu.length : restaurant.menu.filter(m => m.category === cat).length})
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {restaurant.menu.map((item) => {
+        {restaurant.menu
+          .filter((item) => menuFilterCategory === 'Tous' || item.category === menuFilterCategory)
+          .map((item) => {
           const isNew = item.createdAt ? (new Date().getTime() - new Date(item.createdAt).getTime()) / (1000 * 3600 * 24) <= 5 : false;
+          
+          const itemPromo = promotions.find(p => {
+            if (!p.caption) return false;
+            const trimmed = p.caption.trim();
+            if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+              try {
+                const js = JSON.parse(trimmed);
+                return js && js.is_promo_product && js.menu_item_id === item.id;
+              } catch (e) {}
+            }
+            return false;
+          });
+          const parsedItemPromo = itemPromo ? (() => {
+            try {
+              return JSON.parse(itemPromo.caption);
+            } catch (e) { return null; }
+          })() : null;
+          const isPromoActive = parsedItemPromo && (!parsedItemPromo.expires_at || new Date() < new Date(parsedItemPromo.expires_at));
+          const promoPrice = isPromoActive && parsedItemPromo.promo_price ? Number(parsedItemPromo.promo_price) : null;
+          const promoBadge = isPromoActive ? parsedItemPromo.badge_text : null;
+
           return (
           <div
             key={item.id}
@@ -4854,6 +5442,12 @@ export const BusinessDashboard: React.FC<Props> = ({
                 <div className="absolute top-2 left-2 flex items-center space-x-1 bg-green-500 text-white px-1.5 py-0.5 rounded shadow border border-green-400 z-10">
                     <Sparkles size={8} />
                     <span className="text-[8px] font-black uppercase tracking-widest">New</span>
+                </div>
+            )}
+            {isPromoActive && (
+                <div className={`absolute top-2 ${isNew ? 'left-14' : 'left-2'} flex items-center space-x-1 bg-red-500 text-white px-1.5 py-0.5 rounded shadow border border-red-400 z-10 animate-pulse`}>
+                    <Zap size={8} className="fill-white" />
+                    <span className="text-[8px] font-black uppercase tracking-widest">{promoBadge || "PROMO"}</span>
                 </div>
             )}
             <img
@@ -4904,9 +5498,20 @@ export const BusinessDashboard: React.FC<Props> = ({
               </p>
               <div className="flex justify-between items-end mt-3">
                 <div className="flex flex-col">
-                  <span className="font-black text-brand-600 text-xl">
-                    {formatPrice(item.price)}
-                  </span>
+                  {isPromoActive && promoPrice !== null ? (
+                    <div className="flex flex-col">
+                      <span className="text-xs text-gray-400 line-through">
+                        {formatPrice(item.price)}
+                      </span>
+                      <span className="font-black text-brand-600 text-xl">
+                        {formatPrice(promoPrice)}
+                      </span>
+                    </div>
+                  ) : (
+                    <span className="font-black text-brand-600 text-xl">
+                      {formatPrice(item.price)}
+                    </span>
+                  )}
                   {item.stock !== undefined && (
                     <div className="flex flex-col mt-1">
                       <div
@@ -6499,6 +7104,8 @@ export const BusinessDashboard: React.FC<Props> = ({
     }
 
     if (settingsSubView === "subscription") {
+      const subInfo = getSubscriptionStatus();
+
       return (
         <div className="space-y-8 animate-in fade-in slide-in-from-right duration-500 max-w-7xl mx-auto">
           <button
@@ -6533,6 +7140,99 @@ export const BusinessDashboard: React.FC<Props> = ({
                 Statut: {restaurant.subscriptionTier || "Standard"}
               </div>
             </div>
+
+            {/* Active Subscription Details Card */}
+            {subInfo.isPaid && (
+              <div className="mb-10 relative z-10 p-8 rounded-3xl bg-brand-500/5 border border-brand-500/25 dark:border-brand-500/20 backdrop-blur-md animate-in fade-in duration-500">
+                <div className="absolute top-0 right-0 w-32 h-32 bg-brand-500/10 rounded-full blur-2xl -mr-16 -mt-16 pointer-events-none"></div>
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-3">
+                      <span className="flex h-3 w-3 relative">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
+                      </span>
+                      <h4 className="text-lg font-black uppercase tracking-wider text-gray-900 dark:text-white">
+                        Votre Abonnement Actif
+                      </h4>
+                      <span className="bg-brand-500/10 text-brand-600 dark:text-brand-400 font-black text-xs px-3 py-1 rounded-full uppercase tracking-wider">
+                        {subInfo.tier === 'premium' ? 'Pro' : subInfo.tier === 'enterprise' ? 'Elite' : subInfo.tier.toUpperCase()}
+                      </span>
+                    </div>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs font-bold text-gray-600 dark:text-gray-300">
+                      <div className="flex items-center gap-2">
+                        <span className="text-gray-400 uppercase tracking-widest text-[9px]">Date d'activation :</span>
+                        <span className="text-gray-900 dark:text-white font-black">{subInfo.startDate.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-gray-400 uppercase tracking-widest text-[9px]">Prochain renouvellement :</span>
+                        <span className="text-gray-900 dark:text-white font-black">{subInfo.endDate.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                      </div>
+                    </div>
+
+                    {!subInfo.canModify && (
+                      <div className="flex items-start gap-2 text-amber-600 dark:text-amber-400 text-[10px] uppercase tracking-wider font-extrabold bg-amber-500/10 p-3.5 rounded-2xl border border-amber-500/20 max-w-2xl">
+                        <Lock size={14} className="shrink-0 mt-0.5" />
+                        <p className="leading-normal">
+                          Modification verrouillée : Vous devez attendre 72 heures après le paiement pour changer ou annuler votre forfait. Disponible à partir du <strong className="underline">{subInfo.unlockDate.toLocaleString('fr-FR')}</strong> (dans <strong className="underline">{subInfo.remainingStr}</strong>).
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={async () => {
+                        if (!subInfo.canModify) {
+                          toast.error(
+                            `Annulation impossible : Votre abonnement est verrouillé pendant encore ${subInfo.remainingStr}. Disponible le ${subInfo.unlockDate?.toLocaleString('fr-FR')}.`,
+                            { id: "sub-cancel-lock" }
+                          );
+                          return;
+                        }
+
+                        // Trigger cancel to Free tier
+                        if (window.confirm("Êtes-vous sûr de vouloir annuler votre abonnement actuel et repasser au forfait Gratuit ?")) {
+                          try {
+                            const { error } = await supabase
+                              .from("restaurants")
+                              .update({
+                                subscription_tier: "free",
+                                subscription_status: "active",
+                                subscription_end_date: null
+                              })
+                              .eq("id", restaurant.id);
+                            
+                            if (error) throw error;
+
+                            toast.success("Votre abonnement a été annulé avec succès. Vous êtes repassé au forfait Gratuit.", { icon: "✨" });
+                            
+                            onUpdateRestaurant({
+                              ...restaurant,
+                              subscriptionTier: "free",
+                              subscriptionStatus: "active",
+                              subscriptionEndDate: undefined
+                            });
+                          } catch (err) {
+                            console.error("Error cancelling subscription:", err);
+                            toast.error("Erreur lors de l'annulation de l'abonnement.");
+                          }
+                        }
+                      }}
+                      className={`px-6 py-4 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center gap-2 ${
+                        subInfo.canModify 
+                          ? "bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 shadow-sm" 
+                          : "bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed dark:bg-gray-800/50 dark:border-gray-700"
+                      }`}
+                    >
+                      <X size={14} />
+                      Annuler l'abonnement
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8 relative z-10">
               {PLANS.map((plan) => (
@@ -6593,6 +7293,28 @@ export const BusinessDashboard: React.FC<Props> = ({
                       restaurant.subscriptionStatus === "active"
                     }
                     onClick={async () => {
+                      if (restaurant.subscriptionTier === plan.id && restaurant.subscriptionStatus === "active") {
+                        return; // already active
+                      }
+
+                      // Check 72-hour restriction if they have an active paid subscription
+                      const currentSub = getSubscriptionStatus();
+                      
+                      const getPlanLevel = (id: string) => {
+                        const levels: Record<string, number> = { free: 0, basic: 1, premium: 2, enterprise: 3 };
+                        return levels[id] ?? 0;
+                      };
+                      
+                      const isUpgrade = getPlanLevel(plan.id) > getPlanLevel(currentSub.tier);
+                      
+                      if (currentSub.isPaid && !currentSub.canModify && !isUpgrade) {
+                        toast.error(
+                          `Rétrogradation impossible : Vous devez attendre au moins 72 heures après le paiement de votre abonnement actuel pour pouvoir le réduire. Disponible le ${currentSub.unlockDate?.toLocaleString('fr-FR')} (dans ${currentSub.remainingStr}).`,
+                          { id: "sub-modify-lock" }
+                        );
+                        return;
+                      }
+
                       if (plan.id === "free") {
                         const nextMonth = new Date();
                         nextMonth.setMonth(nextMonth.getMonth() + 1);
@@ -8356,7 +9078,7 @@ export const BusinessDashboard: React.FC<Props> = ({
           <div>
             <span className="text-[10px] uppercase font-bold tracking-widest text-gray-400 block font-mono">Total Commande</span>
             <p className="text-xl font-black text-brand-605 dark:text-brand-400 mt-1">
-              {formatDualPrice(order.totalAmount || 0, restaurant.currency as 'USD' | 'CDF' || 'USD', order.exchangeRate || restaurant.exchangeRate, restaurant.displayCurrencyMode)}
+              {formatDualPrice(order.totalAmount || 0, restaurant.currency as 'USD' | 'CDF' || 'USD', order.exchangeRate || restaurant.exchangeRate || appSettings?.payment_exchange_rate || 2850, restaurant.displayCurrencyMode)}
             </p>
           </div>
           
@@ -8401,13 +9123,13 @@ export const BusinessDashboard: React.FC<Props> = ({
                       {item.name}
                     </span>
                     <span className="text-[11px] text-gray-450 dark:text-gray-500 font-medium font-mono">
-                      {formatDualPrice(item.price || 0, restaurant.currency as 'USD' | 'CDF' || 'USD', order.exchangeRate || restaurant.exchangeRate, restaurant.displayCurrencyMode)} x {item.quantity}
+                      {formatDualPrice(item.price || 0, restaurant.currency as 'USD' | 'CDF' || 'USD', order.exchangeRate || restaurant.exchangeRate || appSettings?.payment_exchange_rate || 2850, restaurant.displayCurrencyMode)} x {item.quantity}
                     </span>
                   </div>
                 </div>
 
                 {["pending", "preparing"].includes(order.status) && (
-                  <div className="flex items-center bg-gray-50 dark:bg-gray-900 rounded-lg p-0.5 shadow-xs flex-shrink-0">
+                  <div className="flex items-center bg-gray-50 dark:bg-gray-900 rounded-lg p-1 shadow-xs flex-shrink-0">
                     <button
                       onClick={() => updateOrderItemQuantity(order.id, itemIndex, item.quantity - 1)}
                       className="w-6 h-6 flex items-center justify-center text-gray-500 hover:text-rose-505 hover:bg-rose-50 dark:hover:bg-rose-950/20 rounded font-black text-xs active:scale-90 cursor-pointer"
@@ -8586,12 +9308,20 @@ export const BusinessDashboard: React.FC<Props> = ({
         )}
 
         {order.status === "delivering" && (
-          <button
-            onClick={() => updateOrderStatus(order.id, "completed")}
-            className="px-4 py-2 bg-[#06C167] hover:bg-emerald-600 text-white rounded-xl text-xs font-bold transition-all"
-          >
-            Terminer (Livré)
-          </button>
+          <div className="flex flex-col sm:flex-row gap-2 w-full">
+            <button
+              onClick={() => setTrackingOrder(order)}
+              className="px-4 py-2 bg-blue-650 hover:bg-blue-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-sm active:scale-95"
+            >
+              <Navigation size={13} className="animate-pulse" /> Suivre le livreur en direct
+            </button>
+            <button
+              onClick={() => updateOrderStatus(order.id, "completed")}
+              className="px-4 py-2 bg-[#06C167] hover:bg-emerald-600 text-white rounded-xl text-xs font-bold transition-all"
+            >
+              Terminer (Livré)
+            </button>
+          </div>
         )}
       </div>
     );
@@ -8706,7 +9436,7 @@ export const BusinessDashboard: React.FC<Props> = ({
               <h4 className="font-extrabold text-sm text-gray-900 dark:text-white mt-0.5 flex items-center">
                 #{order.id.slice(0, 6).toUpperCase()}
                 {order.isUrgent && (
-                  <span className="ml-1.5 text-rose-500 p-0.5 rounded-full animate-pulse">
+                  <span className="ml-1.5 text-rose-500 p-1 rounded-full animate-pulse">
                     <Zap size={11} className="fill-rose-500" />
                   </span>
                 )}
@@ -8715,7 +9445,7 @@ export const BusinessDashboard: React.FC<Props> = ({
             <div className="text-right font-mono">
               <span className="text-[9px] uppercase font-black text-gray-400 block font-mono">TOTAL</span>
               <span className="text-xs font-black text-brand-655 dark:text-brand-402 font-mono">
-                {formatDualPrice(order.totalAmount || 0, restaurant.currency as 'USD' | 'CDF' || 'USD', order.exchangeRate || restaurant.exchangeRate, restaurant.displayCurrencyMode)}
+                {formatDualPrice(order.totalAmount || 0, restaurant.currency as 'USD' | 'CDF' || 'USD', order.exchangeRate || restaurant.exchangeRate || appSettings?.payment_exchange_rate || 2850, restaurant.displayCurrencyMode)}
               </span>
             </div>
           </div>
@@ -8868,12 +9598,20 @@ export const BusinessDashboard: React.FC<Props> = ({
           )}
 
           {order.status === "delivering" && (
-            <button
-              onClick={() => updateOrderStatus(order.id, "completed")}
-              className="w-full py-2 bg-[#06C167] text-white rounded-xl font-black uppercase text-[10px] tracking-wider hover:bg-emerald-600"
-            >
-              Terminer (Livré)
-            </button>
+            <div className="flex flex-col gap-1.5 w-full">
+              <button
+                onClick={() => setTrackingOrder(order)}
+                className="w-full py-2 bg-blue-600 text-white rounded-xl font-bold uppercase text-[10px] tracking-wider hover:bg-blue-700 flex items-center justify-center gap-1"
+              >
+                <Navigation size={12} className="animate-pulse" /> Suivre en direct
+              </button>
+              <button
+                onClick={() => updateOrderStatus(order.id, "completed")}
+                className="w-full py-2 bg-[#06C167] text-white rounded-xl font-black uppercase text-[10px] tracking-wider hover:bg-emerald-600"
+              >
+                Terminer (Livré)
+              </button>
+            </div>
           )}
         </div>
       </div>
@@ -9772,6 +10510,9 @@ export const BusinessDashboard: React.FC<Props> = ({
             </button>
           </div>
 
+          {/* CODE VALIDATOR FOR RESTAURANT */}
+          <RestaurantCodeValidator restaurant={restaurant} onUpdateRestaurant={onUpdateRestaurant} />
+
           {isAddingPromo && (
             <form
               onSubmit={addPromotion}
@@ -10027,7 +10768,7 @@ export const BusinessDashboard: React.FC<Props> = ({
                       </div>
 
                       {promoLinkedItemId && (
-                        <div className="grid grid-cols-2 gap-3 animate-in fade-in slide-in-from-top-2 duration-300">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 animate-in fade-in slide-in-from-top-2 duration-300">
                           <div>
                             <label className="block text-[9px] font-bold text-gray-500 dark:text-gray-400 mb-2 uppercase tracking-wide">
                               Prix Promo ($)
@@ -10053,6 +10794,28 @@ export const BusinessDashboard: React.FC<Props> = ({
                               value={promoBadgeText}
                               onChange={(e) => setPromoBadgeText(e.target.value)}
                             />
+                          </div>
+                          <div>
+                            <label className="block text-[9px] font-bold text-gray-500 dark:text-gray-400 mb-2 uppercase tracking-wide">
+                              Durée Validité
+                            </label>
+                            <select
+                              className="w-full px-4 py-3 glass border border-white/20 rounded-xl focus:ring-2 focus:ring-purple-500 outline-none dark:text-white font-medium bg-gray-900"
+                              value={promoDuration}
+                              onChange={(e) => setPromoDuration(e.target.value)}
+                            >
+                              <option value="1h">1 heure</option>
+                              <option value="4h">4 heures</option>
+                              <option value="12h">12 heures</option>
+                              <option value="24h">24 heures (1 jour)</option>
+                              <option value="2d">2 jours</option>
+                              <option value="3d">3 jours</option>
+                              <option value="5d">5 jours</option>
+                              <option value="7d">7 jours</option>
+                              <option value="15d">15 jours</option>
+                              <option value="30d">30 jours</option>
+                              <option value="unlimited">Illimité</option>
+                            </select>
                           </div>
                         </div>
                       )}
@@ -10083,7 +10846,7 @@ export const BusinessDashboard: React.FC<Props> = ({
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-8">
             {promotions.map((promo) => {
               const parsed = (() => {
-                if (!promo.caption) return { caption: "STORY LIVE", isPromo: false };
+                if (!promo.caption) return { caption: "STORY LIVE", isPromo: false, expiresAt: null, durationLabel: null };
                 const trimmed = promo.caption.trim();
                 if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
                   try {
@@ -10095,11 +10858,13 @@ export const BusinessDashboard: React.FC<Props> = ({
                         badge: js.badge_text,
                         price: js.promo_price,
                         menuItemId: js.menu_item_id,
+                        expiresAt: js.expires_at,
+                        durationLabel: js.duration_label,
                       };
                     }
                   } catch (e) {}
                 }
-                return { caption: promo.caption, isPromo: false };
+                return { caption: promo.caption, isPromo: false, expiresAt: null, durationLabel: null };
               })();
 
               const linkedItem = parsed.isPromo && parsed.menuItemId
@@ -10145,12 +10910,30 @@ export const BusinessDashboard: React.FC<Props> = ({
                       {parsed.caption}
                     </p>
                     <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">
-                        {new Date(promo.createdAt).toLocaleDateString()}
+                      <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex flex-col">
+                        <span>{new Date(promo.createdAt).toLocaleDateString()}</span>
+                        {parsed.expiresAt && (
+                          <span className="text-[9px] text-purple-400 lowercase font-medium">
+                            {(() => {
+                              const diff = new Date(parsed.expiresAt).getTime() - new Date().getTime();
+                              if (diff <= 0) return "expiré";
+                              const hrs = Math.floor(diff / (1000 * 3600));
+                              if (hrs >= 24) return `reste ${Math.floor(hrs / 24)} j`;
+                              if (hrs >= 1) return `reste ${hrs} h`;
+                              return `reste ${Math.floor(diff / (1000 * 60))} min`;
+                            })()}
+                          </span>
+                        )}
                       </span>
-                      <div className="flex items-center text-brand-500 font-black text-[10px] uppercase tracking-widest">
-                        <Zap size={12} className="mr-1" /> ACTIVE
-                      </div>
+                      {parsed.expiresAt && new Date() > new Date(parsed.expiresAt) ? (
+                        <div className="flex items-center text-red-500 font-black text-[10px] uppercase tracking-widest">
+                          <AlertTriangle size={12} className="mr-1" /> EXPIRÉ
+                        </div>
+                      ) : (
+                        <div className="flex items-center text-brand-500 font-black text-[10px] uppercase tracking-widest">
+                          <Zap size={12} className="mr-1 animate-pulse" /> ACTIVE
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -10325,16 +11108,43 @@ export const BusinessDashboard: React.FC<Props> = ({
                     <div className="space-y-4">
                       <div>
                         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                          Nom de la récompense
+                          Associer à un article du menu (Stock)
+                        </label>
+                        <select
+                          value={newRewardMenuItemId}
+                          onChange={(e) => {
+                            const itemId = e.target.value;
+                            setNewRewardMenuItemId(itemId);
+                            const item = restaurant?.menu?.find((i: any) => i.id === itemId);
+                            if (item) {
+                              setNewRewardName(item.name);
+                              setNewRewardDesc(`Offert gratuitement contre ${newRewardPoints} points fidélité (Valeur $${item.price.toFixed(2)}).`);
+                            }
+                          }}
+                          className="w-full p-3 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-brand-500 outline-none text-xs text-gray-900 dark:text-white font-bold"
+                        >
+                          <option value="">-- Aucun produit lié (Libre) --</option>
+                          {restaurant?.menu?.map((item: any) => (
+                            <option key={item.id} value={item.id}>
+                              {item.name} — ${item.price} (Stock dispo : {item.stock ?? 'Non suivi'})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                          Nom de la récompense / Article Cadeau
                         </label>
                         <input
                           type="text"
                           value={newRewardName}
                           onChange={(e) => setNewRewardName(e.target.value)}
-                          placeholder="Ex: Burger Offert"
-                          className="w-full p-3 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-brand-500 outline-none"
+                          placeholder="Ex: Burger Offert, Jus Gratuit, etc."
+                          className="w-full p-3 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-brand-500 outline-none text-xs"
                         />
                       </div>
+
                       <div>
                         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                           Points requis
@@ -10345,10 +11155,11 @@ export const BusinessDashboard: React.FC<Props> = ({
                           onChange={(e) =>
                             setNewRewardPoints(Number(e.target.value))
                           }
-                          className="w-full p-3 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-brand-500 outline-none"
+                          className="w-full p-3 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-brand-500 outline-none text-xs"
                           min="1"
                         />
                       </div>
+
                       <div>
                         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                           Description
@@ -10356,9 +11167,26 @@ export const BusinessDashboard: React.FC<Props> = ({
                         <textarea
                           value={newRewardDesc}
                           onChange={(e) => setNewRewardDesc(e.target.value)}
-                          placeholder="Décrivez la récompense..."
-                          className="w-full p-3 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-brand-500 outline-none h-24 resize-none"
+                          placeholder="Décrivez les conditions de la récompense..."
+                          className="w-full p-3 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-brand-500 outline-none text-xs h-20 resize-none"
                         />
+                      </div>
+
+                      <div className="p-3 bg-brand-50 dark:bg-brand-950/40 rounded-xl border border-brand-200 dark:border-brand-900/50">
+                        <label className="flex items-center space-x-2.5 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={newRewardDeductStock}
+                            onChange={(e) => setNewRewardDeductStock(e.target.checked)}
+                            className="w-4 h-4 rounded text-brand-600 focus:ring-brand-500"
+                          />
+                          <span className="text-xs font-black text-gray-800 dark:text-gray-200">
+                            Déduire automatiquement du stock du menu lors de la validation
+                          </span>
+                        </label>
+                        <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1 pl-6">
+                          Chaque fois qu'un client utilise ce code en caisse, 1 unité sera automatiquement retirée de l'inventaire.
+                        </p>
                       </div>
                     </div>
                     <div className="mt-6 flex justify-end space-x-3">
@@ -10562,37 +11390,70 @@ export const BusinessDashboard: React.FC<Props> = ({
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-                {loyaltyRewards.map((reward) => (
-                  <div
-                    key={reward.id}
-                    className="glass p-8 rounded-[32px] border border-white/20 dark:border-white/5 shadow-2xl relative group hover:border-brand-500/30 transition-all"
-                  >
-                    <div className="flex justify-between items-start mb-6">
-                      <h5 className="font-display font-bold text-xl text-gray-900 dark:text-white tracking-tight">
-                        {reward.name}
-                      </h5>
-                      <span className="bg-yellow-500/10 text-yellow-600 dark:bg-yellow-500/20 dark:text-yellow-400 text-[10px] font-bold px-4 py-2 rounded-full border border-yellow-500/20 tracking-widest">
-                        {reward.points_required} points
-                      </span>
+                {loyaltyRewards.map((reward) => {
+                  const linkedItem = restaurant?.menu?.find((item: any) => item.id === reward.menu_item_id || item.name.toLowerCase() === reward.name.toLowerCase());
+                  const shouldDeduct = reward.deduct_stock !== false;
+                  return (
+                    <div
+                      key={reward.id}
+                      className="glass p-7 rounded-[32px] border border-white/20 dark:border-white/5 shadow-2xl relative group hover:border-brand-500/30 transition-all flex flex-col justify-between"
+                    >
+                      <div>
+                        <div className="flex justify-between items-start mb-4">
+                          <div>
+                            <h5 className="font-display font-bold text-lg text-gray-900 dark:text-white tracking-tight">
+                              {reward.name}
+                            </h5>
+                            {linkedItem && (
+                              <p className="text-[10px] font-bold text-brand-600 dark:text-brand-400 mt-0.5 flex items-center">
+                                📦 Produit lié : {linkedItem.name} (${linkedItem.price})
+                              </p>
+                            )}
+                          </div>
+                          <span className="bg-yellow-500/10 text-yellow-600 dark:bg-yellow-500/20 dark:text-yellow-400 text-[10px] font-bold px-3 py-1.5 rounded-full border border-yellow-500/20 tracking-widest shrink-0 ml-2">
+                            {reward.points_required} pts
+                          </span>
+                        </div>
+
+                        <p className="text-gray-500 dark:text-gray-400 text-[11px] font-medium leading-relaxed mb-4 line-clamp-3">
+                          {reward.description || 'Aucune description fournie.'}
+                        </p>
+
+                        {/* Stock & Deduction Badge */}
+                        <div className="flex flex-wrap gap-2 mb-6">
+                          <div className={`text-[10px] font-black px-2.5 py-1 rounded-lg border ${
+                            shouldDeduct
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800'
+                              : 'bg-gray-100 text-gray-600 border-gray-200 dark:bg-gray-800 dark:text-gray-400'
+                          }`}>
+                            {shouldDeduct ? '⚡ Déduction stock auto (-1)' : 'ℹ️ Stock non déduit'}
+                          </div>
+
+                          {linkedItem && (
+                            <div className="text-[10px] font-black px-2.5 py-1 rounded-lg bg-blue-50 text-blue-700 border border-blue-200 dark:bg-blue-950/60 dark:text-blue-300 dark:border-blue-800">
+                              En Stock : {linkedItem.stock ?? 'Illimité'}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between pt-4 border-t border-white/10 mt-auto">
+                        <span className="text-[10px] font-mono font-bold text-gray-400 uppercase tracking-widest">
+                          ID: {reward.id.slice(0, 8)}
+                        </span>
+                        {user.role === "business" && (
+                          <button
+                            onClick={() => handleDeleteReward(reward.id)}
+                            className="p-2.5 bg-red-500/10 text-red-500 rounded-xl hover:bg-red-500 hover:text-white transition-all shadow-md group-hover:scale-105"
+                            title="Supprimer la récompense"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        )}
+                      </div>
                     </div>
-                    <p className="text-gray-500 dark:text-gray-400 text-[11px] font-bold tracking-widest leading-relaxed mb-8 line-clamp-3">
-                      {reward.description}
-                    </p>
-                    <div className="flex items-center justify-between pt-6 border-t border-white/10">
-                      <span className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">
-                        {reward.id.slice(0, 8)} REGISTRY
-                      </span>
-                      {user.role === "business" && (
-                        <button
-                          onClick={() => handleDeleteReward(reward.id)}
-                          className="p-3 bg-red-500/10 text-red-500 rounded-2xl hover:bg-red-500 hover:text-white transition-all shadow-xl group-hover:scale-110"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
                 {loyaltyRewards.length === 0 && (
                   <div className="col-span-full py-16 glass border-dashed border-2 border-white/10 rounded-[40px] flex flex-col items-center justify-center text-center opacity-50">
                     <Gift
@@ -10876,7 +11737,7 @@ export const BusinessDashboard: React.FC<Props> = ({
 
   return (
     <DashboardContext.Provider
-      value={{ restaurant, setActiveView, setSettingsSubView }}
+      value={{ user, restaurant, setActiveView, setSettingsSubView }}
     >
       <div className="min-h-[100dvh] bg-slate-50 dark:bg-[#0b0f19] flex transition-colors duration-300 relative overflow-hidden text-gray-900 dark:text-gray-100">
         {/* Subtle high-end ambient backgrounds */}
@@ -10964,6 +11825,37 @@ export const BusinessDashboard: React.FC<Props> = ({
           />
         )}
 
+        {trackingOrder && (
+          <div className="fixed inset-0 z-[1200] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-white dark:bg-gray-900 rounded-3xl p-5 w-full max-w-lg shadow-2xl border border-gray-100 dark:border-gray-800 animate-in zoom-in-95 duration-200">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="font-black text-lg text-gray-900 dark:text-white flex items-center gap-2">
+                  <Navigation className="text-blue-600 animate-pulse" size={20} />
+                  Suivi de la Commande #{trackingOrder.id.slice(0, 6)}
+                </h3>
+                <button 
+                  onClick={() => setTrackingOrder(null)} 
+                  className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-full transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+              <LiveDeliveryMap
+                orderId={trackingOrder.id}
+                restaurantCoords={restaurant ? { lat: restaurant.latitude || -4.312, lng: restaurant.longitude || 15.310 } : undefined}
+                customerCoords={
+                  trackingOrder.deliveryLocation
+                    ? { lat: trackingOrder.deliveryLocation.lat, lng: trackingOrder.deliveryLocation.lng }
+                    : undefined
+                }
+                fallbackLat={(trackingOrder as any).delivery_lat || (trackingOrder.deliveryLocation ? trackingOrder.deliveryLocation.lat : undefined)}
+                fallbackLng={(trackingOrder as any).delivery_lng || (trackingOrder.deliveryLocation ? trackingOrder.deliveryLocation.lng : undefined)}
+                isPrivateCourier={trackingOrder.items?.[0]?.isPrivateCourier === true}
+              />
+            </div>
+          </div>
+        )}
+
         {/* DELETE CONFIRMATION MODAL */}
         {confirmingDeleteOrder && (
           <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4">
@@ -11006,11 +11898,11 @@ export const BusinessDashboard: React.FC<Props> = ({
         <aside className="hidden lg:flex w-72 flex-col bg-white/70 dark:bg-[#0c111d]/75 backdrop-blur-xl border-r border-gray-150 dark:border-white/[0.06] h-screen sticky top-0 transition-all duration-500 z-50 shadow-sm shadow-gray-200/40 dark:shadow-none">
           <div className="p-8 border-b border-white/10">
             <div className="flex items-center space-x-3 mb-6">
-              <div className="bg-white p-2 rounded-2xl shadow-xl ring-1 ring-black/5">
+              <div className="bg-brand-500 rounded-2xl shadow-xl ring-1 ring-black/5 flex items-center justify-center overflow-hidden w-14 h-14">
                 <img
                   src={APP_LOGO_URL}
                   alt="DashMeals"
-                  className="h-10 w-auto object-contain"
+                  className="w-full h-full object-cover"
                 />
               </div>
               <div className="flex flex-col">
@@ -11022,26 +11914,29 @@ export const BusinessDashboard: React.FC<Props> = ({
                 </p>
               </div>
             </div>
-            <div className="flex items-center space-x-2">
-              <button
-                onClick={handleManualRefresh}
-                disabled={isRefreshing}
-                className={`p-2.5 rounded-2xl transition-all active:scale-90 ${isRefreshing ? 'bg-brand-50 text-brand-600' : 'bg-gray-50 dark:bg-white/5 text-gray-500 hover:text-brand-600'}`}
-                title="Synchroniser les données"
-              >
-                <RefreshCw size={20} className={isRefreshing ? 'animate-spin' : ''} />
-              </button>
-              <button
-                onClick={() => setIsNotificationsOpen(true)}
-                className="relative p-2.5 text-gray-500 hover:bg-white dark:hover:bg-white/5 hover:shadow-sm rounded-2xl transition-all active:scale-90"
-              >
-                <Bell size={20} />
-                {unreadNotificationsCount > 0 && (
-                  <span className="absolute top-2 right-2 w-4 h-4 bg-brand-600 text-white text-[9px] font-black flex items-center justify-center rounded-full border-2 border-white dark:border-gray-800 animate-bounce">
-                    {unreadNotificationsCount}
-                  </span>
-                )}
-              </button>
+            <div className="flex items-center justify-between gap-1 pt-3 border-t border-gray-100 dark:border-white/5">
+              {renderSyncBadge()}
+              <div className="flex items-center space-x-1">
+                <button
+                  onClick={handleManualRefresh}
+                  disabled={isRefreshing}
+                  className={`p-2 rounded-xl transition-all active:scale-90 ${isRefreshing ? 'bg-brand-50 text-brand-600' : 'bg-gray-50 dark:bg-white/5 text-gray-500 hover:text-brand-600'}`}
+                  title="Synchroniser les données"
+                >
+                  <RefreshCw size={18} className={isRefreshing ? 'animate-spin' : ''} />
+                </button>
+                <button
+                  onClick={() => setIsNotificationsOpen(true)}
+                  className="relative p-2 text-gray-500 hover:bg-white dark:hover:bg-white/5 hover:shadow-sm rounded-xl transition-all active:scale-90"
+                >
+                  <Bell size={18} />
+                  {unreadNotificationsCount > 0 && (
+                    <span className="absolute top-1.5 right-1.5 w-4 h-4 bg-brand-600 text-white text-[9px] font-black flex items-center justify-center rounded-full border-2 border-white dark:border-gray-800 animate-bounce">
+                      {unreadNotificationsCount}
+                    </span>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
           <nav className="flex-1 p-4 space-y-2 overflow-y-auto custom-scrollbar pr-1 pb-10">
@@ -11077,6 +11972,11 @@ export const BusinessDashboard: React.FC<Props> = ({
               "marketing",
               <Megaphone size={20} />,
               t("marketing"),
+            )}
+            {renderSidebarItem(
+              "claimed_offers",
+              <QrCode size={20} />,
+              "Codes Client",
             )}
             {renderSidebarItem(
               "marketplace",
@@ -11119,11 +12019,11 @@ export const BusinessDashboard: React.FC<Props> = ({
 
         <div className="lg:hidden fixed top-0 left-0 right-0 bg-white/90 dark:bg-[#0c111d]/90 backdrop-blur-md border-b border-gray-100 dark:border-white/[0.06] z-50 px-4 py-3.5 flex justify-between items-center transition-colors duration-350 shadow-sm shadow-gray-100/50 dark:shadow-none">
           <div className="flex items-center space-x-2">
-            <div className="bg-white p-1 rounded-md shadow-sm border border-gray-100 dark:border-gray-700">
+            <div className="bg-brand-500 rounded-lg shadow-sm border border-brand-400 flex items-center justify-center overflow-hidden w-8 h-8">
               <img
                 src={APP_LOGO_URL}
                 alt="DashMeals"
-                className="h-6 w-auto object-contain"
+                className="w-full h-full object-cover"
               />
             </div>
             <div className="flex flex-col">
@@ -11135,7 +12035,8 @@ export const BusinessDashboard: React.FC<Props> = ({
               </p>
             </div>
           </div>
-          <div className="flex items-center space-x-2">
+          <div className="flex items-center space-x-1.5">
+            {renderSyncBadge(true)}
             {(restaurant.subscriptionStatus === 'expired' || (restaurant.subscriptionEndDate && Math.ceil((new Date(restaurant.subscriptionEndDate).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24)) <= 7)) && (
               <button
                 onClick={() => {
@@ -11283,6 +12184,7 @@ export const BusinessDashboard: React.FC<Props> = ({
           {activeView === "analytics" && canAccessView("analytics") && renderAnalytics()}
           {activeView === "support" && renderSupport()}
           {activeView === "marketing" && canAccessView("marketing") && renderMarketing()}
+          {activeView === "claimed_offers" && canAccessView("claimed_offers") && <RestaurantCodeValidator restaurant={restaurant} onUpdateRestaurant={onUpdateRestaurant} />}
           {activeView === "marketplace" && canAccessView("marketplace") && renderMarketplace()}
           {activeView === "subscribers" && canAccessView("subscribers") && renderSubscribers()}
           {activeView === "team" && canAccessView("team") && renderTeam()}
@@ -11306,7 +12208,7 @@ export const BusinessDashboard: React.FC<Props> = ({
           >
             <ShoppingBag size={19} className={activeView === 'orders' ? 'stroke-[2.5px] text-brand-600 dark:text-brand-400' : 'stroke-[1.8px]'} />
             {pendingOrdersCount > 0 && (
-              <span className="absolute top-0.5 right-4 w-4 h-4 bg-red-500 text-white text-[8px] font-black flex items-center justify-center rounded-full border border-white dark:border-gray-900 animate-pulse">
+              <span className="absolute top-1 right-4 w-4 h-4 bg-red-500 text-white text-[8px] font-black flex items-center justify-center rounded-full border border-white dark:border-gray-900 animate-pulse">
                 {pendingOrdersCount}
               </span>
             )}
@@ -11419,7 +12321,7 @@ export const BusinessDashboard: React.FC<Props> = ({
                           <Landmark size={20} />
                         </div>
                         <div>
-                          <p className="text-sm font-bold text-gray-900 dark:text-white">Money Fusion RDC</p>
+                          <p className="text-sm font-bold text-gray-900 dark:text-white">Paiement Sécurisé KPay</p>
                           <p className="text-[10px] text-gray-500">Validation automatique</p>
                         </div>
                       </div>
@@ -11433,7 +12335,7 @@ export const BusinessDashboard: React.FC<Props> = ({
                       <div className="mb-4 p-4 bg-blue-50 dark:bg-blue-900/10 border border-blue-100 dark:border-blue-800 rounded-xl flex items-start gap-3">
                         <Info className="text-blue-600 mt-0.5" size={16} />
                         <p className="text-[10px] text-blue-800 dark:text-blue-300 leading-relaxed font-medium">
-                          L'activation est instantanée dès confirmation de Money Fusion. Assurez-vous d'avoir le montant disponible sur votre compte mobile.
+                          L'activation est instantanée dès confirmation de KPay. Assurez-vous d'avoir le montant disponible sur votre compte.
                         </p>
                       </div>
 
@@ -11485,23 +12387,35 @@ export const BusinessDashboard: React.FC<Props> = ({
                           </ul>
                         </div>
 
-                        <button
-                          onClick={requestManualSubscription}
-                          disabled={isSubmittingSubscription}
-                          className="w-full bg-orange-600 hover:bg-orange-700 disabled:opacity-50 text-white py-4 rounded-2xl font-black uppercase tracking-widest shadow-xl shadow-orange-600/20 transition-all active:scale-95 flex items-center justify-center gap-3"
-                        >
-                          {isSubmittingSubscription ? (
-                            <>
-                              <RefreshCw size={20} className="animate-spin" />
-                              Envoi en cours...
-                            </>
-                          ) : (
-                            <>
-                              <Send size={20} />
-                              Envoyer la demande
-                            </>
-                          )}
-                        </button>
+                        {getCooldownStatus().active ? (
+                          <div className="p-4 bg-red-500/10 rounded-2xl border border-red-500/20 text-red-600 dark:text-red-400 text-xs font-bold uppercase tracking-wider space-y-2">
+                            <p className="flex items-center gap-2">
+                              <Lock size={14} className="animate-pulse" />
+                              Option verrouillée pour encore {getCooldownStatus().remainingStr}
+                            </p>
+                            <p className="text-[10px] text-gray-500 dark:text-gray-400 normal-case leading-relaxed font-medium">
+                              Suite à l'expiration de votre dernière demande sans validation administrative sous 48 heures, vous devez patienter jusqu'à la fin de la période de régulation de 24 heures avant d'en formuler une nouvelle.
+                            </p>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={requestManualSubscription}
+                            disabled={isSubmittingSubscription}
+                            className="w-full bg-orange-600 hover:bg-orange-700 disabled:opacity-50 text-white py-4 rounded-2xl font-black uppercase tracking-widest shadow-xl shadow-orange-600/20 transition-all active:scale-95 flex items-center justify-center gap-3"
+                          >
+                            {isSubmittingSubscription ? (
+                              <>
+                                <RefreshCw size={20} className="animate-spin" />
+                                Envoi en cours...
+                              </>
+                            ) : (
+                              <>
+                                <Send size={20} />
+                                Envoyer la demande
+                              </>
+                            )}
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>

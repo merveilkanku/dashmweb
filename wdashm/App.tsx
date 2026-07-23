@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from './lib/supabase';
 import { MOCK_RESTAURANTS, KINSHASA_CENTER_LAT, KINSHASA_CENTER_LNG } from './constants';
 import { Restaurant, User, UserRole, MenuItem, BusinessType, Theme, Language, AppFont } from './types';
@@ -47,13 +47,55 @@ function App() {
   const [isRecoveryMode, setIsRecoveryMode] = useState(isRecoveryUrl);
   const [loading, setLoading] = useState(!isRecoveryUrl);
   const [showSplash, setShowSplash] = useState(!isRecoveryUrl);
+  const [loadingProgress, setLoadingProgress] = useState(0);
+  const [loadingStatus, setLoadingStatus] = useState("Démarrage de DashMeals...");
   const [isOfflineMode, setIsOfflineMode] = useState(false);
   const [isSupabaseReachable, setIsSupabaseReachable] = useState(true);
   const [isAppLocked, setIsAppLocked] = useState(false);
   const [isAppInitializing, setIsAppInitializing] = useState(true);
+  const [restaurantsLoaded, setRestaurantsLoaded] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+
+  // Coordonner la fermeture du loader une fois à 100%
+  useEffect(() => {
+    if (loadingProgress >= 100 && loading) {
+      const timer = setTimeout(() => {
+        setLoading(false);
+        setIsAppInitializing(false);
+      }, 500); // Court délai pour apprécier les 100% et assurer une transition fluide
+      return () => clearTimeout(timer);
+    }
+  }, [loadingProgress, loading]);
+
+  // Incrémentation automatique et progressive lente pour donner de la vie au chargement si le réseau est lent
+  useEffect(() => {
+    if (!loading) return;
+    const interval = setInterval(() => {
+      setLoadingProgress(prev => {
+        if (prev < 95) {
+          // Ralentit à mesure qu'on approche de 95% pour ne pas devancer le chargement réel
+          const step = prev < 40 ? 4 : prev < 70 ? 2 : prev < 90 ? 1 : 0.5;
+          return Math.min(prev + step, 95);
+        }
+        return prev;
+      });
+    }, 180);
+    return () => clearInterval(interval);
+  }, [loading]);
+
+  // Failsafe pour les utilisateurs connectés : si la session est résolue et qu'on reste bloqué au chargement, on force l'accès après 3.5 secondes
+  useEffect(() => {
+    if (loading && currentUser) {
+      const timer = setTimeout(() => {
+        console.warn("🛡️ [App] Failsafe connecté déclenché : accès direct autorisé pour l'utilisateur connecté.");
+        setLoadingProgress(100);
+        setLoadingStatus("Données prêtes ! Redirection vers votre espace...");
+      }, 3500);
+      return () => clearTimeout(timer);
+    }
+  }, [loading, currentUser]);
   
-  // Money Fusion Payment Detection
+  // KPay Payment Detection
   const queryParams = new URLSearchParams(window.location.search);
   const paymentStatus = queryParams.get('payment_status') as 'success' | 'cancel' | 'failed' | null;
 
@@ -217,7 +259,9 @@ function App() {
   const [newRestoType, setNewRestoType] = useState<BusinessType>('restaurant');
   const [creationLoading, setCreationLoading] = useState(false);
   const isFetchingProfile = useRef(false);
+  const isRestaurantsLoaded = useRef(false);
   const lastFetchedUserId = useRef<string | null>(null);
+  const fetchRestaurantsRequestId = useRef(0);
 
   // Apply & Persist Theme
   useEffect(() => {
@@ -303,16 +347,16 @@ function App() {
   useEffect(() => { initializingRef.current = isAppInitializing; }, [isAppInitializing]);
   useEffect(() => { currentUserRef.current = currentUser; }, [currentUser]);
 
-  // Standalone global watchdog for ultra-fast native/web rendering bypass (1.5s short window)
+  // Standalone global watchdog for ultra-fast native/web rendering bypass (6.0s fail-safe window)
   useEffect(() => {
     const watchdogTimer = setTimeout(() => {
       if (initializingRef.current || loadingRef.current) {
-        console.warn("🛡️ [App] Standalone Watchdog: Forcing initial states to false to bypass splash screen/loader hang.");
-        setIsAppInitializing(false);
-        setLoading(false);
+        console.warn("🛡️ [App] Standalone Watchdog: Completing progress to bypass any loader hang.");
+        setLoadingProgress(100);
+        setLoadingStatus("Démarrage en mode fail-safe...");
         setShowSplash(false);
       }
-    }, 1500); // 1.5 second ultra-short watchdog window
+    }, 6000); // 6.0 second fail-safe watchdog window
 
     return () => clearTimeout(watchdogTimer);
   }, []);
@@ -322,16 +366,18 @@ function App() {
     const initSession = async () => {
       console.log("🚀 [Auth] Début initSession");
       setIsAppInitializing(true);
+      setLoadingProgress(10);
+      setLoadingStatus("Initialisation de la session sécurisée...");
 
-      // Force le stop du loading après 1.5s quoi qu'il arrive (Fail-safe ultra rapide)
+      // Force le stop du loading après 15.0s quoi qu'il arrive (Fail-safe)
       const safetyTimer = setTimeout(() => {
         if (initializingRef.current || loadingRef.current) {
-          console.warn("⚠️ [Auth] Safety timeout. Forcing UI display.");
-          setIsAppInitializing(false);
-          setLoading(false);
+          console.warn("⚠️ [Auth] Safety timeout. Completing progress.");
+          setLoadingProgress(100);
+          setLoadingStatus("Lancement de l'application...");
           setShowSplash(false);
         }
-      }, 1500);
+      }, 15000);
 
       try {
         if (isRecoveryMode) {
@@ -345,12 +391,12 @@ function App() {
 
         // We removed the eager fetchRestaurants here to wait for session resolution to optimize load times!
 
-        // Récupération instantanée de la session locale Supabase avec timeout de sécurité de 3.5s
+        // Récupération instantanée de la session locale Supabase avec timeout de sécurité de 10.0s
         let session = null;
         try {
           const getSessionPromise = supabase.auth.getSession();
           const timeoutPromise = new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('TIMEOUT')), 3500)
+            setTimeout(() => reject(new Error('TIMEOUT')), 10000)
           );
           const sessionRes = await Promise.race([getSessionPromise, timeoutPromise]) as any;
           session = sessionRes.data?.session;
@@ -419,8 +465,8 @@ function App() {
           }
 
           setShowAuth(false);
-          setLoading(false);
-          setIsAppInitializing(false);
+          setLoadingProgress(35);
+          setLoadingStatus("Session active, chargement de votre profil...");
 
           // Force fetching the full profile from postgres in the background
           if (!isFetchingProfile.current) {
@@ -462,96 +508,100 @@ function App() {
       }
     };
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       console.log(`🔔 [Auth] Event: ${event}`);
       
-      if (event === 'SIGNED_IN') {
-        if (session?.user) {
-          console.log(`📡 [Auth] ${event} pour ${session.user.email}`);
-          
-          // Refresh restaurants to ensure fresh state upon login
-          fetchRestaurants().catch(console.error);
-
-          // EFFICIENT FAST PROVISIONAL LOGIN TO PREVENT BLOCKING LOADER SCREENS!
-          // Instantly set a provisional user based on the Auth session metadata and transition immediately.
-          if (!currentUserRef.current || currentUserRef.current.id !== session.user.id) {
-            const metadata = session.user.user_metadata || {};
-            const savedRole = localStorage.getItem(`dashmeals_role_${session.user.id}`);
-            const computedRole = savedRole || metadata.role || 'client';
+      // On sort immédiatement du callback avant tout appel réseau Supabase
+      setTimeout(async () => {
+        if (event === 'SIGNED_IN') {
+          if (session?.user) {
+            console.log(`📡 [Auth] ${event} pour ${session.user.email}`);
             
-            let finalRole = computedRole;
-            if (session.user.email && session.user.email.toLowerCase().trim() === 'irmerveilkanku@gmail.com') {
-              finalRole = 'superadmin';
+            // Refresh restaurants to ensure fresh state upon login
+            fetchRestaurants().catch(console.error);
+
+            // EFFICIENT FAST PROVISIONAL LOGIN TO PREVENT BLOCKING LOADER SCREENS!
+            // Instantly set a provisional user based on the Auth session metadata and transition immediately.
+            if (!currentUserRef.current || currentUserRef.current.id !== session.user.id) {
+              const metadata = session.user.user_metadata || {};
+              const savedRole = localStorage.getItem(`dashmeals_role_${session.user.id}`);
+              const computedRole = savedRole || metadata.role || 'client';
+              
+              let finalRole = computedRole;
+              if (session.user.email && session.user.email.toLowerCase().trim() === 'irmerveilkanku@gmail.com') {
+                finalRole = 'superadmin';
+              }
+
+              const pendingAuthStr2 = localStorage.getItem('dashmeals_pending_auth');
+              const pendingAuthData2 = pendingAuthStr2 ? JSON.parse(pendingAuthStr2) : null;
+
+              const provisionalUser: User = {
+                id: session.user.id,
+                email: session.user.email!,
+                name: pendingAuthData2?.name || metadata.full_name || metadata.name || session.user.email!.split('@')[0],
+                role: finalRole as UserRole,
+                city: pendingAuthData2?.city || metadata.city || 'Kinshasa',
+                phoneNumber: pendingAuthData2?.phone || metadata.phone_number || '',
+                avatarUrl: metadata.avatar_url || metadata.picture || '',
+                settings: {
+                  notifPush: true,
+                  notifEmail: true,
+                  notifSms: false,
+                  twoFactorEnabled: false,
+                  appLockEnabled: false,
+                  appLockPin: null,
+                  biometricsEnabled: false
+                }
+              };
+              
+              console.log("⚡ [Auth] Fast provisional user loaded instantly on event:", provisionalUser.name, "(Role:", provisionalUser.role, ")");
+              setCurrentUser(provisionalUser);
+              currentUserRef.current = provisionalUser;
             }
 
-            const pendingAuthStr2 = localStorage.getItem('dashmeals_pending_auth');
-            const pendingAuthData2 = pendingAuthStr2 ? JSON.parse(pendingAuthStr2) : null;
-
-            const provisionalUser: User = {
-              id: session.user.id,
-              email: session.user.email!,
-              name: pendingAuthData2?.name || metadata.full_name || metadata.name || session.user.email!.split('@')[0],
-              role: finalRole as UserRole,
-              city: pendingAuthData2?.city || metadata.city || 'Kinshasa',
-              phoneNumber: pendingAuthData2?.phone || metadata.phone_number || '',
-              avatarUrl: metadata.avatar_url || metadata.picture || '',
-              settings: {
-                notifPush: true,
-                notifEmail: true,
-                notifSms: false,
-                twoFactorEnabled: false,
-                appLockEnabled: false,
-                appLockPin: null,
-                biometricsEnabled: false
-              }
-            };
+            setShowAuth(false);
+            setLoading(true);
+            setLoadingProgress(20);
+            setLoadingStatus("Connexion réussie, synchronisation...");
             
-            console.log("⚡ [Auth] Fast provisional user loaded instantly on event:", provisionalUser.name, "(Role:", provisionalUser.role, ")");
-            setCurrentUser(provisionalUser);
-            currentUserRef.current = provisionalUser;
+            // Fetch real profile table data in the background
+            fetchUserProfile(session.user.id, session.user.email!, session.user.user_metadata);
           }
-
-          setShowAuth(false);
+        }
+        
+        if (event === 'SIGNED_OUT') {
+          // Délai de sécurité : un TOKEN_REFRESHED peut déclencher un faux SIGNED_OUT
+          // on attend 300ms avant de vérifier si la session est vraiment morte
+          await new Promise(resolve => setTimeout(resolve, 300));
+          
+          try {
+            const { data: { session: activeSession } } = await supabase.auth.getSession();
+            if (!activeSession) {
+              // Vérification supplémentaire : si on a un user business/delivery,
+              // ne pas déconnecter sauf si le localStorage est aussi vide
+              const hasLocalStaff = !!localStorage.getItem('dashmeals_staff_session');
+              if (currentUserRef.current && !hasLocalStaff) {
+                console.log('👋 [Auth] SIGNED_OUT confirmé, déconnexion.');
+                setCurrentUser(null);
+                lastFetchedUserId.current = null;
+                localStorage.removeItem('dashmeals_staff_session');
+                setShowAuth(true);
+              }
+            } else {
+              console.log('📡 [Auth] Faux SIGNED_OUT ignoré — session active trouvée.');
+            }
+          } catch (e) {
+            console.warn('⚠️ [Auth] Erreur vérification SIGNED_OUT:', e);
+          }
           setIsAppInitializing(false);
           setLoading(false);
-          
-          // Fetch real profile table data in the background
-          fetchUserProfile(session.user.id, session.user.email!, session.user.user_metadata);
         }
-      }
-      
-      if (event === 'SIGNED_OUT') {
-        // Délai de sécurité : un TOKEN_REFRESHED peut déclencher un faux SIGNED_OUT
-        // on attend 300ms avant de vérifier si la session est vraiment morte
-        await new Promise(resolve => setTimeout(resolve, 300));
-        
-        try {
-          const { data: { session: activeSession } } = await supabase.auth.getSession();
-          if (!activeSession) {
-            // Vérification supplémentaire : si on a un user business/delivery,
-            // ne pas déconnecter sauf si le localStorage est aussi vide
-            const hasLocalStaff = !!localStorage.getItem('dashmeals_staff_session');
-            if (currentUserRef.current && !hasLocalStaff) {
-              console.log('👋 [Auth] SIGNED_OUT confirmé, déconnexion.');
-              setCurrentUser(null);
-              lastFetchedUserId.current = null;
-              localStorage.removeItem('dashmeals_staff_session');
-              setShowAuth(true);
-            }
-          } else {
-            console.log('📡 [Auth] Faux SIGNED_OUT ignoré — session active trouvée.');
-          }
-        } catch (e) {
-          console.warn('⚠️ [Auth] Erreur vérification SIGNED_OUT:', e);
-        }
-        setIsAppInitializing(false);
-        setLoading(false);
-      }
 
-      if (event === 'PASSWORD_RECOVERY') {
-        setAuthMode('reset');
-        setShowAuth(true);
-      }
+        if (event === 'PASSWORD_RECOVERY') {
+          setAuthMode('reset');
+          setShowAuth(true);
+        }
+      }, 0);
     });
 
     initSession();
@@ -614,9 +664,11 @@ function App() {
             
             setCurrentUser(virtualProfile);
             currentUserRef.current = virtualProfile;
+            setLoadingProgress(100);
+            setLoadingStatus("Profil synchronisé ! Bienvenue sur DashMeals.");
+            setShowAuth(false);
             setLoading(false);
             setIsAppInitializing(false);
-            setShowAuth(false);
             isFetchingProfile.current = false;
         }
     }, 10000);
@@ -660,7 +712,7 @@ function App() {
 
       let fetchTimeoutId: NodeJS.Timeout;
       const fetchTimeoutPromise = new Promise<{ data: any, error: any }>((resolve) => 
-        fetchTimeoutId = setTimeout(() => resolve({ data: null, error: new Error('TIMEOUT') }), 8000)
+        fetchTimeoutId = setTimeout(() => resolve({ data: null, error: new Error('TIMEOUT') }), 10000)
       );
 
       let profileRes = await Promise.race([fetchProfilePromise, fetchTimeoutPromise]);
@@ -677,7 +729,7 @@ function App() {
           .maybeSingle();
         
         const fallbackTimeoutPromise = new Promise<{ data: any, error: any }>((resolve) => 
-          fetchTimeoutId = setTimeout(() => resolve({ data: null, error: new Error('TIMEOUT') }), 8000)
+          fetchTimeoutId = setTimeout(() => resolve({ data: null, error: new Error('TIMEOUT') }), 10000)
         );
         const fallbackRes = await Promise.race([fallbackPromise, fallbackTimeoutPromise]);
         clearTimeout(fetchTimeoutId!);
@@ -925,6 +977,10 @@ function App() {
           if (userData.id && !userData.id.startsWith('mock-')) {
             initializeCapacitorPush(userData.id);
           }
+
+          // Synchroniser immédiatement les restaurants avec le vrai profil utilisateur résolu !
+          console.log("📡 [Auth] Synchronisation immédiate des restaurants pour le profil connecté...");
+          await fetchRestaurants();
         }
     } catch (error) {
       console.error("❌ [Auth] Erreur fetchUserProfile:", error);
@@ -936,8 +992,12 @@ function App() {
          setCurrentUser(cachedUser);
          currentUserRef.current = cachedUser;
          setShowAuth(false);
-         setIsAppInitializing(false);
       }
+      
+      // On synchronise aussi les restaurants en cas d'erreur de profil pour charger depuis le cache local ou la DB
+      try {
+        await fetchRestaurants();
+      } catch (_) {}
       
       setIsOfflineMode(prev => {
         if (!prev) {
@@ -947,15 +1007,21 @@ function App() {
       });
     } finally {
       clearTimeout(profileTimeout);
+      isFetchingProfile.current = false;
+      // We ALWAYS set the loading progress to 100% and turn off loading/initializing states
+      // when fetchUserProfile completes, to ensure the user is never stuck behind a loading screen.
+      setLoadingProgress(100);
+      setLoadingStatus("Données chargées ! Bienvenue sur DashMeals.");
       setLoading(false);
       setIsAppInitializing(false);
-      isFetchingProfile.current = false;
     }
   };
 
-  const fetchRestaurants = async () => {
+  const fetchRestaurants = useCallback(async () => {
+    const requestId = ++fetchRestaurantsRequestId.current; // identifiant unique pour CET appel
+    isRestaurantsLoaded.current = false;
     try {
-      console.log(`📡 [Restaurants] Début chargement...`);
+      console.log(`📡 [Restaurants] Début chargement... (req #${requestId})`);
       let data: any[] | null = null;
       let error: any = null;
 
@@ -963,7 +1029,7 @@ function App() {
         .from('restaurants')
         .select(`
           *,
-          menu_items (id, name, description, price, image, category, is_available, created_at)
+          menu_items (id, name, description, price, image, category, is_available, stock, low_stock_threshold, created_at)
         `)
         .order('created_at', { ascending: true });
         
@@ -973,42 +1039,62 @@ function App() {
             id, owner_id, type, name, description, latitude, longitude, 
             city, is_open, is_active, rating, review_count, 
             preparation_time, estimated_delivery_time, delivery_available, 
-            cover_image, created_at,
-            subscription_tier, subscription_status, subscription_end_date,
-            menu_items (id, name, description, price, image, category, is_available, created_at)
+            cover_image, currency, exchange_rate, display_currency_mode,
+            is_verified, verification_status, verification_requested,
+            verification_payment_status, verification_docs, created_at,
+            subscription_tier, subscription_status, subscription_end_date, settings,
+            menu_items (id, name, description, price, image, category, is_available, stock, low_stock_threshold, created_at)
           `)
           .order('created_at', { ascending: true });
 
-      // Si le rôle est un restaurant ou staff, optimiser pour ne télécharger QUE ses propres données !
-      if (currentUserRef.current?.role === 'restaurant') {
-         query = query.eq('owner_id', currentUserRef.current.id);
-         fallbackQuery = fallbackQuery.eq('owner_id', currentUserRef.current.id);
-      } else if (currentUserRef.current?.role === 'staff' && currentUserRef.current.businessId) {
-         query = query.eq('id', currentUserRef.current.businessId);
-         fallbackQuery = fallbackQuery.eq('id', currentUserRef.current.businessId);
-      }
+      // Toujours récupérer l'intégralité du catalogue de restaurants pour assurer une synchronisation globale et fluide entre tous les rôles et modes de vue
+      console.log(`📡 [Restaurants] Récupération globale pour synchronisation (Rôle: ${currentUserRef.current?.role || 'visiteur'})`);
 
-      const fullResult = await query;
+      // Utilisation d'un timeout de sécurité robuste de 10.0s pour le chargement principal des restaurants
+      let fetchTimeoutId: NodeJS.Timeout;
+      const fetchTimeoutPromise = new Promise<{ data: any[] | null, error: any }>((resolve) => 
+        fetchTimeoutId = setTimeout(() => resolve({ data: null, error: new Error('TIMEOUT') }), 10000)
+      );
 
-      data = fullResult.data;
-      error = fullResult.error;
+      const fullResultRes = await Promise.race([query, fetchTimeoutPromise]);
+      clearTimeout(fetchTimeoutId!);
+
+      data = fullResultRes.data;
+      error = fullResultRes.error;
 
       // Fallback if columns are missing (Error 42703 or 400 with specific message)
       if (error && (error.code === '42703' || error.message?.includes('column'))) {
         console.warn("⚠️ [Restaurants] Colonnes manquantes détectées, tentative avec sélection minimale...");
-        const fallback = await fallbackQuery;
-        data = fallback.data;
-        error = fallback.error;
+        let fallbackTimeoutId: NodeJS.Timeout;
+        const fallbackTimeoutPromise = new Promise<{ data: any[] | null, error: any }>((resolve) => 
+          fallbackTimeoutId = setTimeout(() => resolve({ data: null, error: new Error('TIMEOUT') }), 10000)
+        );
+        const fallbackRes = await Promise.race([fallbackQuery, fallbackTimeoutPromise]);
+        clearTimeout(fallbackTimeoutId!);
+        data = fallbackRes.data;
+        error = fallbackRes.error;
       }
 
       if (error) throw error;
 
-      // Fetch all meal reviews
+      // Fetch all meal reviews with safety timeout
       let mealReviews: any[] = [];
       try {
-        const { data: revs, error: revsErr } = await supabase
+        const fetchRevsPromise = supabase
           .from('meal_reviews')
           .select('menu_item_id, rating');
+        
+        let revsTimeoutId: NodeJS.Timeout;
+        const revsTimeoutPromise = new Promise<{ data: any[] | null, error: any }>((resolve) => 
+          revsTimeoutId = setTimeout(() => resolve({ data: null, error: new Error('TIMEOUT') }), 3000)
+        );
+
+        const revsRes = await Promise.race([fetchRevsPromise, revsTimeoutPromise]);
+        clearTimeout(revsTimeoutId!);
+        
+        const revs = revsRes.data;
+        const revsErr = revsRes.error;
+
         if (!revsErr && revs) {
           mealReviews = revs;
           localStorage.setItem('dashmeals_meal_reviews', JSON.stringify(revs));
@@ -1019,6 +1105,12 @@ function App() {
       } catch (e) {
         const local = localStorage.getItem('dashmeals_meal_reviews');
         if (local) mealReviews = JSON.parse(local);
+      }
+
+      // ⛔️ Ignore si une requête plus récente a déjà été lancée entre-temps
+      if (requestId !== fetchRestaurantsRequestId.current) {
+        console.log(`⏭️ [Restaurants] Résultat obsolète ignoré (req #${requestId})`);
+        return;
       }
 
       if (data && data.length > 0) {
@@ -1064,14 +1156,27 @@ function App() {
             const avgRating = itemReviews.length > 0
               ? Number((itemReviews.reduce((sum: number, r: any) => sum + r.rating, 0) / itemReviews.length).toFixed(1))
               : undefined;
+
+            let itemCategory = m.category;
+            let itemDesc = m.description || '';
+            if (itemDesc) {
+              const catMatch = itemDesc.match(/\[cat:([^\]]+)\]/);
+              if (catMatch) {
+                itemCategory = catMatch[1].trim();
+                itemDesc = itemDesc.replace(/\[cat:[^\]]+\]/g, '').trim();
+              }
+            }
+
             return {
               id: m.id,
               name: m.name,
-              description: m.description,
+              description: itemDesc,
               price: Number(m.price) || 0,
               image: m.image,
-              category: m.category,
+              category: itemCategory,
               isAvailable: m.is_available,
+              stock: m.stock !== undefined ? Number(m.stock) : undefined,
+              lowStockThreshold: m.low_stock_threshold !== undefined ? Number(m.low_stock_threshold) : undefined,
               rating: avgRating,
               reviewCount: itemReviews.length,
               createdAt: m.created_at
@@ -1079,22 +1184,50 @@ function App() {
           })
         }));
         setRestaurants(mappedRestaurants);
+        localStorage.setItem('dashmeals_restaurants_cache', JSON.stringify(mappedRestaurants));
         setIsOfflineMode(false);
       } else {
-        console.log("ℹ️ Aucun restaurant trouvé en base. Utilisation des données MOCK par défaut pour garantir le bon fonctionnement.");
-        setRestaurants(MOCK_RESTAURANTS);
+        console.log("ℹ️ Aucun restaurant trouvé en base. Utilisation du cache ou des données MOCK.");
+        const cachedRestos = localStorage.getItem('dashmeals_restaurants_cache');
+        if (cachedRestos) {
+          setRestaurants(JSON.parse(cachedRestos));
+        } else {
+          setRestaurants(MOCK_RESTAURANTS);
+        }
       }
     } catch (err: any) {
-      console.warn("Erreur chargement restaurants. Utilisation des données MOCK.", err.message);
-      setRestaurants(MOCK_RESTAURANTS);
+      if (requestId !== fetchRestaurantsRequestId.current) return;
+      console.warn("Erreur chargement restaurants. Utilisation du cache ou des données MOCK.", err.message);
+      const cachedRestos = localStorage.getItem('dashmeals_restaurants_cache');
+      if (cachedRestos) {
+        setRestaurants(JSON.parse(cachedRestos));
+      } else {
+        setRestaurants(MOCK_RESTAURANTS);
+      }
       setIsOfflineMode(true);
+    } finally {
+      if (requestId === fetchRestaurantsRequestId.current) {
+        isRestaurantsLoaded.current = true;
+        setRestaurantsLoaded(true);
+        setLoadingProgress(100);
+        setLoadingStatus("Données chargées ! Bienvenue sur DashMeals.");
+      }
     }
-  };
+  }, []);
 
-  // Realtime subscription for restaurants
+  // Realtime subscription for restaurants and menu items to ensure hot sync across all roles & tabs
   useEffect(() => {
+    let syncTimeout: NodeJS.Timeout | null = null;
+    const triggerSync = () => {
+      if (syncTimeout) clearTimeout(syncTimeout);
+      syncTimeout = setTimeout(() => {
+        console.log("🔄 [Realtime] Synchronisation à chaud des restaurants et des menus...");
+        fetchRestaurants().catch(console.error);
+      }, 500); // 500ms debounce to avoid spamming the DB
+    };
+
     const channel = supabase
-      .channel('public-restaurants-all')
+      .channel('public-restaurants-sync-all')
       .on(
         'postgres_changes',
         {
@@ -1103,27 +1236,79 @@ function App() {
           table: 'restaurants'
         },
         (payload) => {
-          if (payload.eventType === 'INSERT' || payload.eventType === 'DELETE') {
-            console.log("Changement majeur détecté dans les restaurants, rechargement...");
-            fetchRestaurants();
-          } else if (payload.eventType === 'UPDATE') {
-            // "Appelé après chaque update local" -> we ignore UPDATE here to avoid layout thrashing and extra API calls.
-            // Component handleUpdateRestaurant already updates local state perfectly.
+          console.log(`📡 [Realtime] Événement sur 'restaurants' (${payload.eventType}). Synchronisation en cours...`);
+          triggerSync();
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'menu_items'
+        },
+        (payload) => {
+          console.log(`📡 [Realtime] Événement sur 'menu_items' (${payload.eventType}). Synchronisation en cours...`);
+          triggerSync();
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'app_settings'
+        },
+        (payload) => {
+          console.log(`📡 [Realtime] Événement sur 'app_settings' (${payload.eventType}). Synchronisation des paramètres...`);
+          triggerSync();
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'profiles'
+        },
+        (payload) => {
+          console.log(`📡 [Realtime] Événement sur 'profiles' (${payload.eventType}). Synchronisation utilisateur...`);
+          triggerSync();
+          if (currentUserRef.current?.id && (payload.new as any)?.id === currentUserRef.current.id) {
+             fetchUserProfile(currentUserRef.current.id, currentUserRef.current.email, currentUserRef.current);
           }
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log(`🔌 [Realtime] Restaurants channel status changed: ${status}`);
+        if (status === 'CHANNEL_ERROR') {
+          console.error("❌ [Realtime] Channel error on restaurants, fallback to automatic polling...");
+        }
+      });
 
     return () => {
       supabase.removeChannel(channel);
+      if (syncTimeout) clearTimeout(syncTimeout);
     };
   }, []);
 
+  // Backing up the real-time subscriptions with a reliable background polling mechanism (every 20s)
+  // to guarantee restaurant profiles, menu items, prices, and stock statuses remain 100% in sync
+  useEffect(() => {
+    const backupInterval = setInterval(() => {
+      console.log("⏱️ [App] Background backup polling of restaurants & menus...");
+      fetchRestaurants().catch(console.error);
+    }, 20000);
+    return () => clearInterval(backupInterval);
+  }, [fetchRestaurants]);
+
   const handleUpdateRestaurant = async (updatedResto: Restaurant) => {
-    // Mise à jour de l'état local uniquement pour éviter les conflits et la latence
-    setRestaurants(prev => prev.map(r => r.id === updatedResto.id ? updatedResto : r));
-    // Nous ne rappelons PAS fetchRestaurants() ici pour laisser l'UI fluide
-    // La prochaine visite ou refresh chargera les données DB.
+    // Mise à jour de l'état local et de la persistence instantanée pour éviter les conflits et la latence
+    setRestaurants(prev => {
+      const next = prev.map(r => r.id === updatedResto.id ? updatedResto : r);
+      localStorage.setItem('dashmeals_restaurants_cache', JSON.stringify(next));
+      return next;
+    });
   };
 
   // Fonction pour force la création du restaurant si l'automatisme a échoué
@@ -1199,21 +1384,47 @@ function App() {
     return <SplashScreen onFinish={() => setShowSplash(false)} />;
   }
 
-  if (loading && !currentUser && !isRecoveryMode) {
+  if (loading && !isRecoveryMode) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 dark:bg-black p-6">
-        <div className="relative mb-8">
-            <div className="w-20 h-20 border-4 border-brand-100 dark:border-brand-900/30 rounded-full animate-pulse"></div>
-            <div className="absolute inset-0 flex items-center justify-center">
-                <div className="w-12 h-12 border-4 border-brand-600 border-t-transparent rounded-full animate-spin"></div>
-            </div>
-            <div className="absolute -top-2 -right-2 bg-brand-500 text-white p-1.5 rounded-full shadow-lg">
-                <Zap size={14} className="animate-pulse" />
-            </div>
+      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 dark:bg-slate-950 p-6 transition-colors duration-300">
+        <div className="w-full max-w-md p-8 bg-white dark:bg-slate-900 rounded-3xl shadow-xl dark:shadow-slate-950/50 border border-slate-100 dark:border-slate-800 text-center flex flex-col items-center">
+          <div className="relative mb-8">
+              <div className="w-24 h-24 border-4 border-brand-100 dark:border-brand-900/30 rounded-full animate-pulse"></div>
+              <div className="absolute inset-0 flex items-center justify-center">
+                  <div className="w-16 h-16 border-4 border-brand-600 border-t-transparent rounded-full animate-spin"></div>
+              </div>
+              <div className="absolute -top-1 -right-1 bg-brand-500 text-white p-2 rounded-full shadow-lg">
+                  <Zap size={16} className="animate-bounce" />
+              </div>
+          </div>
+          
+          <h2 className="text-2xl font-black text-slate-800 dark:text-white uppercase tracking-tight mb-1">
+            Dash<span className="text-brand-500">Meals</span>
+          </h2>
+          <p className="text-slate-500 dark:text-slate-400 text-sm font-medium mb-6 min-h-[20px]">
+            {loadingStatus}
+          </p>
+
+          {/* Progress Bar Container */}
+          <div className="w-full bg-slate-100 dark:bg-slate-800 h-3 rounded-full overflow-hidden relative shadow-inner mb-2">
+            <motion.div 
+              className="bg-gradient-to-r from-brand-500 via-orange-400 to-brand-600 h-full rounded-full transition-all duration-300 ease-out"
+              style={{ width: `${loadingProgress}%` }}
+              layout
+            />
+          </div>
+
+          {/* Percentage and details */}
+          <div className="w-full flex justify-between items-center text-xs font-semibold text-slate-400 dark:text-slate-500 px-1">
+            <span>Synchronisation</span>
+            <span className="text-brand-500 dark:text-brand-400 font-mono text-sm">{loadingProgress}%</span>
+          </div>
+
+          <div className="mt-6 flex items-center gap-2 text-[11px] text-slate-400 dark:text-slate-500">
+            <span className="h-2 w-2 rounded-full bg-green-500 animate-ping"></span>
+            <span>Serveurs de base de données opérationnels</span>
+          </div>
         </div>
-        
-        <h2 className="text-xl font-black text-gray-900 dark:text-white uppercase tracking-tighter mb-2">Chargement...</h2>
-        <p className="text-gray-500 dark:text-gray-400 text-sm font-medium animate-pulse">Initialisation de votre session sécurisée</p>
       </div>
     );
   }
@@ -1294,12 +1505,12 @@ function App() {
   };
 
   const renderContent = () => {
-    // 0. Check for Money Fusion Payment Redirect (IMMEDIATE PRIORITY)
+    // 0. Check for KPay Payment Redirect (IMMEDIATE PRIORITY)
     if (paymentStatus) {
       return (
         <PaymentResult 
           status={paymentStatus} 
-          onReturn={() => window.location.href = window.location.origin} 
+          onReturn={() => window.location.href = "https://dashmeals-rdc.onrender.com"} 
         />
       );
     }
@@ -1392,7 +1603,7 @@ function App() {
             font={font}
             setFont={setFont}
             onUpdateUser={setCurrentUser}
-            onRefreshData={() => fetchRestaurants()}
+            onRefreshData={fetchRestaurants}
           />
         </>
       );
@@ -1411,6 +1622,7 @@ function App() {
             font={font}
             setFont={setFont}
             onGoToClient={() => setAdminClientMode(true)}
+            onRefreshData={fetchRestaurants}
           />
         );
     }
@@ -1432,6 +1644,18 @@ function App() {
       
       // CAS CRITIQUE : L'utilisateur est Business mais n'a pas de restaurant (Echec initialisation)
       if (!myRestaurant && currentUser.role === 'business') {
+           // On attend d'avoir chargé les données de la base avant d'afficher le formulaire de création
+           if (!restaurantsLoaded) {
+               return (
+                   <div className="fixed inset-0 flex items-center justify-center bg-white dark:bg-gray-900 z-[100]">
+                      <div className="flex flex-col items-center">
+                        <div className="w-12 h-12 border-4 border-brand-600 border-t-transparent rounded-full animate-spin mb-4"></div>
+                        <p className="text-sm text-gray-500 animate-pulse font-medium">Chargement de votre établissement...</p>
+                      </div>
+                   </div>
+               );
+           }
+
            return (
                <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex flex-col items-center justify-center p-4">
                    <OfflineBanner isSupabaseReachable={isSupabaseReachable} />
@@ -1511,7 +1735,7 @@ function App() {
               restaurant={myRestaurant} 
               onUpdateRestaurant={handleUpdateRestaurant}
               onUpdateUser={setCurrentUser}
-              onRefreshData={() => fetchRestaurants()}
+              onRefreshData={fetchRestaurants}
               onLogout={handleLogout}
               theme={theme}
               setTheme={setTheme}
@@ -1540,7 +1764,7 @@ function App() {
           setFont={setFont}
           onUpdateUser={setCurrentUser}
           onGoToAdmin={() => setAdminClientMode(false)}
-          onRefreshData={() => fetchRestaurants()}
+          onRefreshData={fetchRestaurants}
         />
       </>
     );

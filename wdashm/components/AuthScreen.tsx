@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { User, UserRole, BusinessType } from '../types';
 import { CITIES_RDC, APP_LOGO_URL } from '../constants';
-import { User as UserIcon, Store, AlertCircle, MapPin, Mail, Phone, KeyRound, Users, Bike, HelpCircle } from 'lucide-react';
+import { User as UserIcon, Store, AlertCircle, MapPin, Mail, Phone, KeyRound, Users, Bike, HelpCircle, Utensils, Star, ShieldCheck, Clock, Sparkles } from 'lucide-react';
 import { HelpCenter } from './HelpCenter';
 import { AppSettings } from '../types';
 import { Language } from '../types';
@@ -47,13 +47,14 @@ export const AuthScreen: React.FC<Props> = ({ onLogin, isSupabaseReachable = tru
   useEffect(() => {
     const fetchAppSettings = async () => {
       try {
-        const { data, error } = await supabase
+        const { data } = await supabase
           .from('app_settings')
           .select('value')
           .eq('id', 'global')
           .single();
         if (data?.value) {
-          setAppSettings(data.value as AppSettings);
+          const parsedVal = typeof data.value === 'string' ? JSON.parse(data.value) : data.value;
+          setAppSettings(parsedVal);
         }
       } catch (err) {
         console.error("Error fetching app settings in AuthScreen:", err);
@@ -70,7 +71,9 @@ export const AuthScreen: React.FC<Props> = ({ onLogin, isSupabaseReachable = tru
         filter: 'id=eq.global'
       }, (payload) => {
         if (payload.new && (payload.new as any).value) {
-          setAppSettings((payload.new as any).value as AppSettings);
+          const rawVal = (payload.new as any).value;
+          const parsedVal = typeof rawVal === 'string' ? JSON.parse(rawVal) : rawVal;
+          setAppSettings(parsedVal);
         }
       }).subscribe();
 
@@ -196,7 +199,7 @@ export const AuthScreen: React.FC<Props> = ({ onLogin, isSupabaseReachable = tru
       const RENDER_PROD_URL = "https://dashmeals-rdc.onrender.com";
       const MOBILE_SCHEME = "com.dashmeals.android://callback";
       
-      let redirectTo = window.location.origin;
+      let redirectTo = "https://dashmeals-rdc.onrender.com";
       
       if (isNative) {
         redirectTo = MOBILE_SCHEME;
@@ -508,7 +511,7 @@ export const AuthScreen: React.FC<Props> = ({ onLogin, isSupabaseReachable = tru
     setError(null);
     try {
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/reset-password`,
+        redirectTo: `https://dashmeals-rdc.onrender.com/reset-password`,
       });
       if (error) throw error;
       setResetEmailSent(true);
@@ -551,11 +554,11 @@ export const AuthScreen: React.FC<Props> = ({ onLogin, isSupabaseReachable = tru
 
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-black flex flex-col items-center overflow-y-auto p-4 pb-80 relative transition-colors duration-500 scroll-smooth">
+    <div className="min-h-screen bg-slate-50 dark:bg-black flex flex-col items-center justify-center overflow-y-auto p-3 sm:p-6 lg:p-10 relative transition-colors duration-500 scroll-smooth">
       {/* Background Decorative Elements */}
       <div className="absolute top-0 left-0 w-full h-full overflow-hidden pointer-events-none z-0">
         <div className="absolute -top-[10%] -left-[10%] w-[40%] h-[40%] bg-brand-500/10 rounded-full blur-[120px] animate-pulse"></div>
-        <div className="absolute -bottom-[10%] -right-[10%] w-[40%] h-[40%] bg-blue-500/10 rounded-full blur-[120px] animate-pulse" style={{ animationDelay: '1s' }}></div>
+        <div className="absolute -bottom-[10%] -right-[10%] w-[40%] h-[40%] bg-amber-500/10 rounded-full blur-[120px] animate-pulse" style={{ animationDelay: '1s' }}></div>
       </div>
 
       {onBackToGuest && (
@@ -568,31 +571,105 @@ export const AuthScreen: React.FC<Props> = ({ onLogin, isSupabaseReachable = tru
         </button>
       )}
 
-      <div className="w-full max-w-md relative z-10 glass rounded-[32px] shadow-2xl overflow-hidden border border-white/40 dark:border-white/10">
+      {/* Main Wide Card Container (Left: Dish Banner Image [Desktop only] | Right: Login/Register Form) */}
+      <div className="w-full max-w-md lg:max-w-5xl relative z-10 glass rounded-[32px] lg:rounded-[40px] shadow-2xl overflow-hidden border border-white/40 dark:border-white/10 flex flex-col lg:flex-row my-auto">
         
-        {/* Header */}
-        <div className="transition-all duration-500 overflow-hidden bg-brand-600 relative p-4 sm:p-8 opacity-100 flex flex-col items-center">
-          {/* Subtle pattern background */}
-          <div className="absolute inset-0 opacity-10 mix-blend-overlay">
-            <svg width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
-              <defs>
-                <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
-                  <path d="M 20 0 L 0 0 0 20" fill="none" stroke="white" strokeWidth="0.5"/>
-                </pattern>
-              </defs>
-              <rect width="100%" height="100%" fill="url(#grid)" />
-            </svg>
+        {/* LEFT SIDE: Appetizing Dish Banner Showcase (Web / Desktop Only) */}
+        <div className="hidden lg:flex lg:w-1/2 relative lg:min-h-[660px] bg-slate-900 flex-col justify-between p-12 overflow-hidden group shrink-0 transition-all duration-500">
+          {/* Dish Background Image */}
+          <img 
+            src="https://images.unsplash.com/photo-1504674900247-0877df9cc836?q=80&w=2070&auto=format&fit=crop" 
+            alt="Plat gourmand DashMeals" 
+            className="absolute inset-0 w-full h-full object-cover transition-transform duration-1000 group-hover:scale-105" 
+          />
+          
+          {/* Gradient Overlay for WCAG AA readability */}
+          <div className="absolute inset-0 bg-gradient-to-r from-black/80 via-black/60 to-black/30"></div>
+
+          {/* Top Header Badge */}
+          <div className="relative z-10 flex items-center justify-between">
+            <div className="flex items-center space-x-2.5 bg-black/40 backdrop-blur-md px-3 py-1.5 rounded-2xl border border-white/15">
+              <img src={APP_LOGO_URL} alt="DashMeals Logo" className="w-8 h-8 rounded-xl object-cover ring-2 ring-brand-500" />
+              <div>
+                <span className="font-display font-black text-white text-xs uppercase tracking-tight block">DashMeals RDC</span>
+                <span className="text-[9px] text-brand-300 font-bold tracking-wider block uppercase">Kinshasa & Provinces</span>
+              </div>
+            </div>
+            
+            <span className="bg-brand-500/90 text-white text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full shadow-lg border border-white/20 backdrop-blur-md flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+              <Utensils size={12} className="text-white" />
+              <span>Plats Gourmands</span>
+            </span>
           </div>
 
-          <div className="bg-white/10 backdrop-blur-xl p-2 sm:p-4 rounded-3xl shadow-2xl border border-white/20 mb-3 sm:mb-6 group transition-transform hover:scale-105 duration-500">
-             <img src={APP_LOGO_URL} alt="DashMeals Logo" className="h-8 sm:h-12 w-auto object-contain filter drop-shadow-lg" />
+          {/* Middle Desktop Narrative */}
+          <div className="relative z-10 my-auto py-8 space-y-6">
+            <h1 className="text-3xl xl:text-4xl font-display font-black text-white tracking-tight leading-tight uppercase">
+              Un bon plat <br />
+              <span className="text-transparent bg-clip-text bg-gradient-to-r from-amber-400 via-orange-300 to-yellow-200">
+                vous attend
+              </span>
+            </h1>
+
+            <p className="text-sm text-gray-200 font-medium leading-relaxed max-w-md">
+              Commandez en quelques clics auprès des meilleurs restaurants de votre ville et faites-vous livrer en toute sérénité.
+            </p>
+
+            <div className="flex items-center space-x-6 pt-2">
+              <div className="flex items-center space-x-2 text-white/90 text-xs font-bold bg-white/10 backdrop-blur-md px-4 py-2.5 rounded-2xl border border-white/15">
+                <Clock size={16} className="text-amber-400" />
+                <span>Livraison Rapide</span>
+              </div>
+              <div className="flex items-center space-x-2 text-white/90 text-xs font-bold bg-white/10 backdrop-blur-md px-4 py-2.5 rounded-2xl border border-white/15">
+                <ShieldCheck size={16} className="text-emerald-400" />
+                <span>Paiement Sécurisé</span>
+              </div>
+            </div>
           </div>
-          <div className="relative z-10">
-             <h1 className="text-2xl sm:text-4xl font-display font-black text-white tracking-tight uppercase leading-none">DashMeals <span className="text-brand-200">RDC</span></h1>
-             <div className="h-0.5 sm:h-1 w-8 sm:w-12 bg-white/30 mx-auto mt-2 sm:mt-4 rounded-full"></div>
-             <p className="text-brand-50 mt-2 sm:mt-4 font-medium text-[10px] sm:text-sm tracking-wide opacity-90 uppercase">La plateforme gourmande de Kinshasa</p>
+
+          {/* Bottom Social Proof on Desktop */}
+          <div className="relative z-10 flex items-center justify-between pt-6 border-t border-white/15">
+            <div className="flex items-center space-x-2">
+              <div className="flex -space-x-2">
+                <img className="w-7 h-7 rounded-full ring-2 ring-white object-cover" src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=100&h=100&q=80" alt="Client" />
+                <img className="w-7 h-7 rounded-full ring-2 ring-white object-cover" src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=100&h=100&q=80" alt="Client" />
+                <img className="w-7 h-7 rounded-full ring-2 ring-white object-cover" src="https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=100&h=100&q=80" alt="Client" />
+              </div>
+              <span className="text-xs font-bold text-white pl-1">+15 000 Gourmands satisfaits</span>
+            </div>
+
+            <div className="flex items-center gap-1.5 text-amber-400 text-xs font-black">
+              <Star size={14} className="fill-amber-400 text-amber-400" />
+              <span>4.9/5 (RDC)</span>
+            </div>
           </div>
         </div>
+
+        {/* RIGHT SIDE: Login / Register Form */}
+        <div className="w-full lg:w-1/2 flex flex-col justify-between bg-white/90 dark:bg-slate-950/90 backdrop-blur-xl relative">
+          <div>
+            {/* Header / Brand Banner on Form Side */}
+            <div className="transition-all duration-500 overflow-hidden bg-brand-600 relative p-4 sm:p-6 flex flex-col items-center">
+              <div className="absolute inset-0 opacity-10 mix-blend-overlay">
+                <svg width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
+                  <defs>
+                    <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+                      <path d="M 20 0 L 0 0 0 20" fill="none" stroke="white" strokeWidth="0.5"/>
+                    </pattern>
+                  </defs>
+                  <rect width="100%" height="100%" fill="url(#grid)" />
+                </svg>
+              </div>
+
+              <div className="bg-brand-500 rounded-2xl shadow-xl mb-2 group transition-transform hover:scale-105 duration-500 ring-4 ring-white/10 flex items-center justify-center overflow-hidden w-16 h-16 sm:w-20 sm:h-20">
+                 <img src={APP_LOGO_URL} alt="DashMeals Logo" className="w-full h-full object-cover" />
+              </div>
+              <div className="relative z-10 text-center">
+                 <h1 className="text-xl sm:text-2xl font-display font-black text-white tracking-tight uppercase leading-none">DashMeals <span className="text-brand-200">RDC</span></h1>
+                 <p className="text-brand-50 mt-1 font-medium text-[10px] sm:text-xs tracking-wide opacity-90 uppercase">Connexion & Inscription</p>
+              </div>
+            </div>
 
         {/* Tabs */}
         {!isStaffMode && !isForgotPassword && !isResettingPassword && (
@@ -1019,7 +1096,7 @@ export const AuthScreen: React.FC<Props> = ({ onLogin, isSupabaseReachable = tru
           {/* Section Mode Démo & Accès Test Rapide */}
           <div className="mt-6 pt-5 border-t border-gray-150 dark:border-gray-800 space-y-3">
             <p className="text-center text-[10px] font-black uppercase tracking-wider text-gray-400 dark:text-gray-500 mb-1">
-              🚀 Accès Démo Rapide & Centre d'aide
+              Accès Démo Rapide & Centre d'aide
             </p>
             
             {/* Bouton de démo principal pour afficher/masquer le sous-menu de démo */}
@@ -1028,7 +1105,7 @@ export const AuthScreen: React.FC<Props> = ({ onLogin, isSupabaseReachable = tru
               onClick={() => setShowDemoOptions(!showDemoOptions)}
               className="w-full py-2.5 px-4 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-750 text-gray-700 dark:text-gray-200 font-bold rounded-xl text-xs shadow-sm transition-all flex items-center justify-center gap-1.5 focus:outline-none"
             >
-              <span>{showDemoOptions ? "Masquer les Comptes Démo 🔼" : "Se connecter en Mode Démo 🔽"}</span>
+              <span>{showDemoOptions ? "Masquer les Comptes Démo" : "Se connecter en Mode Démo"}</span>
             </button>
 
             {/* Liste des comptes démo affichée uniquement si showDemoOptions est vrai */}
@@ -1054,9 +1131,9 @@ export const AuthScreen: React.FC<Props> = ({ onLogin, isSupabaseReachable = tru
                   <button 
                     type="button"
                     onClick={() => handleDemoLogin('delivery')}
-                    className="py-2.5 px-4 bg-blue-50 hover:bg-blue-100 dark:bg-blue-900/10 dark:hover:bg-blue-900/20 text-blue-600 dark:text-blue-400 font-bold rounded-lg text-xs shadow-sm border border-blue-100 dark:border-blue-900/30 transition-all active:scale-95 flex items-center justify-center gap-1"
+                    className="py-2.5 px-4 bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-900/10 dark:hover:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 font-bold rounded-lg text-xs shadow-sm border border-emerald-100 dark:border-emerald-900/30 transition-all active:scale-95 flex items-center justify-center gap-1"
                   >
-                    <span>Demo Livreur 🚴</span>
+                    <span>Demo Livreur</span>
                   </button>
                 </div>
               </div>
@@ -1132,6 +1209,8 @@ export const AuthScreen: React.FC<Props> = ({ onLogin, isSupabaseReachable = tru
           )}
         </div>
       </div>
+    </div>
+  </div>
 
       {isHelpCenterOpen && (
         <HelpCenter 

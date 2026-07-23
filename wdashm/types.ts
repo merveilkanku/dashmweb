@@ -10,7 +10,7 @@ export interface MenuItem {
   description: string;
   price: number;
   image: string;
-  category: 'entrée' | 'plat' | 'boisson' | 'dessert';
+  category: string;
   isAvailable: boolean;
   stock?: number;
   lowStockThreshold?: number;
@@ -106,7 +106,7 @@ export interface CartItem extends MenuItem {
   };
 }
 
-export type ViewMode = 'list' | 'map' | 'restaurant_detail' | 'checkout' | 'success' | 'orders' | 'settings' | 'delivery_onboarding';
+export type ViewMode = 'list' | 'map' | 'restaurant_detail' | 'checkout' | 'success' | 'orders' | 'settings' | 'delivery_onboarding' | 'private_courier';
 
 export interface UserState {
   location: Location | null;
@@ -140,7 +140,7 @@ export interface User {
 
 // Order Types
 export type OrderStatus = 'pending' | 'preparing' | 'ready' | 'delivering' | 'delivered' | 'completed' | 'cancelled';
-export type PaymentMethod = 'cash' | 'mobile_money' | 'money_fusion';
+export type PaymentMethod = 'cash' | 'mobile_money' | 'money_fusion' | 'kpay';
 
 export interface Order {
   id: string;
@@ -240,6 +240,7 @@ export interface AppSettings {
   support_phone: string;
   support_whatsapp: string;
   office_address: string;
+  payment_exchange_rate?: number;
 }
 
 export interface MealReview {
@@ -254,5 +255,24 @@ export interface MealReview {
     email?: string;
     avatar_url?: string;
   };
+}
+
+export interface ClaimedOffer {
+  id: string;
+  code: string; // e.g. "DM-8A92"
+  userId: string;
+  userName: string;
+  userPhone?: string;
+  restaurantId: string;
+  restaurantName: string;
+  promoId?: string;
+  title: string;
+  caption?: string;
+  badgeText?: string;
+  promoPrice?: number;
+  originalPrice?: number;
+  status: 'active' | 'redeemed' | 'expired';
+  createdAt: string;
+  redeemedAt?: string;
 }
 

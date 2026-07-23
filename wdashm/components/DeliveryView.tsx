@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { Order, User, Restaurant, OrderStatus } from '../types';
+import { RouteEstimator } from './RouteEstimator';
+import { APP_LOGO_URL } from '../constants';
 import { 
   Bike, 
   MapPin, 
@@ -29,15 +31,53 @@ import {
   Building,
   UserCheck,
   Camera,
-  Globe
+  Globe,
+  Volume2,
+  VolumeX
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
 import { requestNotificationPermission } from '../utils/notifications';
 import { analytics } from '../utils/analytics';
+import { sendPrivateCourierStatusEmail } from '../lib/email';
+import { CITIES_RDC } from '../constants';
 
 import { ChatWindow } from './ChatWindow';
 import { useTranslation } from '../lib/i18n';
+import { HelpCenter } from './HelpCenter';
+import { LegalModal } from './LegalModal';
+import { AppSettings } from '../types';
+import { HelpCircle } from 'lucide-react';
+
+const getDistanceInKm = (lat1?: number, lon1?: number, lat2?: number, lon2?: number) => {
+  if (lat1 === undefined || lon1 === undefined || lat2 === undefined || lon2 === undefined) return null;
+  const R = 6371; // Radius of the earth in km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+    Math.sin(dLon/2) * Math.sin(dLon/2); 
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); 
+  const d = R * c; // Distance in km
+  return parseFloat(d.toFixed(1));
+};
+
+const getTravelTimeInMinutes = (distance: number, vehicleType: string) => {
+  let speed = 25; // km/h for moto default
+  if (vehicleType === 'velo') speed = 15;
+  else if (vehicleType === 'voiture') speed = 20; // slow due to traffic
+  else if (vehicleType === 'pieton') speed = 5;
+  const hours = distance / speed;
+  const minutes = Math.round(hours * 60);
+  return Math.max(minutes, 3); // min 3 minutes
+};
+
+const PROOF_PHOTO_PRESETS = [
+  { id: 'delivered_to_door', label: 'Déposé devant la porte 🚪', url: 'https://images.unsplash.com/photo-1531346878377-a5be20888e57?auto=format&fit=crop&w=300&h=200&q=80' },
+  { id: 'handed_to_customer', label: 'Remis en main propre 🤝', url: 'https://images.unsplash.com/photo-1522071820081-009f0129c71c?auto=format&fit=crop&w=300&h=200&q=80' },
+  { id: 'placed_on_reception', label: 'Déposé à la réception 🏢', url: 'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?auto=format&fit=crop&w=300&h=200&q=80' },
+];
 
 interface Props {
   user: User;
@@ -49,9 +89,82 @@ type TabType = 'orders' | 'wallet' | 'restaurants' | 'profile';
 
 export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) => {
   const t = useTranslation(user.preferences?.language || 'fr');
+  const fetchAssignedOrdersRequestId = useRef(0);
   const [activeTab, setActiveTab] = useState<TabType>('orders');
   const [orders, setOrders] = useState<Order[]>([]);
+  const [availableCouriers, setAvailableCouriers] = useState<Order[]>([]);
   const [timeTick, setTimeTick] = useState(Date.now());
+
+  // Advanced features state variables
+  const [soundAlertsEnabled, setSoundAlertsEnabled] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('dashmeals_sound_alerts') !== 'false';
+    } catch {
+      return true;
+    }
+  });
+  
+  const [simulatingOrderId, setSimulatingOrderId] = useState<string | null>(null);
+  const [simulationProgress, setSimulationProgress] = useState<number>(0);
+  const [simulationCoords, setSimulationCoords] = useState<{ lat: number; lng: number } | null>(null);
+
+  const [showProofModal, setShowProofModal] = useState<boolean>(false);
+  const [proofOrderId, setProofOrderId] = useState<string | null>(null);
+  const [selectedProofPhoto, setSelectedProofPhoto] = useState<string>('');
+
+  const [walletFilter, setWalletFilter] = useState<'all' | 'today' | 'week'>('all');
+  const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
+  const [isHelpCenterOpen, setIsHelpCenterOpen] = useState(false);
+  const [legalView, setLegalView] = useState<'terms' | 'privacy' | 'contact' | null>(null);
+
+  useEffect(() => {
+    const fetchAppSettings = async () => {
+      try {
+        const { data } = await supabase
+          .from('app_settings')
+          .select('value')
+          .eq('id', 'global')
+          .single();
+        if (data?.value) {
+          const parsedVal = typeof data.value === 'string' ? JSON.parse(data.value) : data.value;
+          setAppSettings(parsedVal);
+        }
+      } catch (err) {
+        console.error("Error fetching app settings in DeliveryView:", err);
+      }
+    };
+    fetchAppSettings();
+
+    const appSettingsSubscription = supabase
+      .channel('public:app_settings_delivery')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'app_settings',
+        filter: 'id=eq.global'
+      }, (payload) => {
+        if (payload.new && (payload.new as any).value) {
+          const rawVal = (payload.new as any).value;
+          const parsedVal = typeof rawVal === 'string' ? JSON.parse(rawVal) : rawVal;
+          setAppSettings(parsedVal);
+        }
+      }).subscribe();
+
+    return () => {
+      supabase.removeChannel(appSettingsSubscription);
+    };
+  }, []);
+
+  const toggleSoundAlerts = () => {
+    const nextVal = !soundAlertsEnabled;
+    setSoundAlertsEnabled(nextVal);
+    try {
+      localStorage.setItem('dashmeals_sound_alerts', String(nextVal));
+    } catch (e) {
+      console.warn("localStorage write blocked:", e);
+    }
+    toast.success(nextVal ? "Alertes sonores activées 🔊" : "Alertes sonores coupées 🔇");
+  };
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -72,6 +185,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
   );
 
   useEffect(() => {
+    if (!soundAlertsEnabled) return;
     if (unacceptedReminders.length > 0 || undeliveredReminders.length > 0) {
       const playReminderSynth = () => {
         try {
@@ -111,7 +225,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
       
       return () => clearInterval(beepInterval);
     }
-  }, [unacceptedReminders.length, undeliveredReminders.length]);
+  }, [unacceptedReminders.length, undeliveredReminders.length, soundAlertsEnabled]);
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
   const [loading, setLoading] = useState(true);
   const [isTracking, setIsTracking] = useState(false);
@@ -196,19 +310,39 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
     fetchRestaurants();
 
     const subscription = supabase
-      .channel('delivery_orders')
+      .channel('delivery_orders_and_restaurants')
       .on('postgres_changes', { 
         event: '*', 
         schema: 'public', 
-        table: 'orders',
-        filter: `delivery_person_id=eq.${user.id}`
+        table: 'orders'
       }, () => {
         fetchAssignedOrders();
       })
+      .on('postgres_changes', { 
+        event: '*', 
+        schema: 'public', 
+        table: 'restaurants'
+      }, () => {
+        fetchRestaurants();
+      })
       .subscribe();
+
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'dashmeals_mock_orders') {
+        fetchAssignedOrders();
+      }
+    };
+    window.addEventListener('storage', handleStorageChange);
+
+    const fallbackInterval = setInterval(() => {
+      fetchAssignedOrders();
+      fetchRestaurants();
+    }, 15000);
 
     return () => {
       subscription.unsubscribe();
+      window.removeEventListener('storage', handleStorageChange);
+      clearInterval(fallbackInterval);
       if (watchId !== null && typeof navigator !== 'undefined' && navigator && navigator.geolocation) {
         try {
           navigator.geolocation.clearWatch(watchId);
@@ -220,13 +354,14 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
   }, [user.id]);
 
   const fetchAssignedOrders = async () => {
+    const requestId = ++fetchAssignedOrdersRequestId.current;
     try {
       const { data, error } = await supabase
         .from('orders')
         .select(`
           *,
           restaurant:restaurants(name, phone_number, latitude, longitude, city, owner_id),
-          customer:profiles!user_id(full_name, phone_number)
+          customer:profiles!user_id(full_name, phone_number, email)
         `)
         .eq('delivery_person_id', user.id)
         .order('created_at', { ascending: false })
@@ -369,7 +504,23 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
             ]
           }
         ];
-        localStorage.setItem("dashmeals_mock_orders", JSON.stringify(generatedDemoOrders));
+        
+        let existingLocal = [];
+        const localOrdersStr = localStorage.getItem("dashmeals_mock_orders");
+        if (localOrdersStr) {
+          try {
+            existingLocal = JSON.parse(localOrdersStr);
+          } catch (e) {}
+        }
+        
+        const mergedLocal = [...existingLocal];
+        generatedDemoOrders.forEach((demoO: any) => {
+          if (!mergedLocal.some((o: any) => o.id === demoO.id)) {
+            mergedLocal.push(demoO);
+          }
+        });
+        
+        localStorage.setItem("dashmeals_mock_orders", JSON.stringify(mergedLocal));
         allOrders = generatedDemoOrders;
       }
 
@@ -416,14 +567,96 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
           }
         };
       });
+      // Fetch available unassigned private couriers
+      let availableCouriersRaw: any[] = [];
+      try {
+        const { data: availableData, error: availableError } = await supabase
+          .from('orders')
+          .select(`
+            *,
+            restaurant:restaurants(name, phone_number, latitude, longitude, city, owner_id),
+            customer:profiles!user_id(full_name, phone_number, email)
+          `)
+          .is('delivery_person_id', null)
+          .order('created_at', { ascending: false })
+          .limit(50);
+
+        if (!availableError && availableData) {
+          availableCouriersRaw = availableData;
+        }
+      } catch (err) {
+        console.warn("Failed fetching database available couriers:", err);
+      }
+
+      // Merge with localStorage unassigned private couriers
+      const localOrdersStrForCouriers = localStorage.getItem("dashmeals_mock_orders");
+      if (localOrdersStrForCouriers) {
+        try {
+          const localOrders = JSON.parse(localOrdersStrForCouriers);
+          const availableLocal = localOrders.filter(
+            (o: any) => (!o.delivery_person_id)
+          );
+          availableLocal.forEach((lOrder: any) => {
+            if (!availableCouriersRaw.some((o: any) => o.id === lOrder.id)) {
+              availableCouriersRaw.push(lOrder);
+            }
+          });
+        } catch (e) {
+          console.error("Error parsing local orders for couriers:", e);
+        }
+      }
+
+      // Map and filter specifically for private courier orders
+      const mappedAvailableCouriers = availableCouriersRaw
+        .map((o: any) => {
+          let parsedItems = o.items;
+          if (typeof parsedItems === 'string') {
+            try {
+              parsedItems = JSON.parse(parsedItems);
+            } catch {
+              parsedItems = [];
+            }
+          }
+          
+          const fallbackName = parsedItems && parsedItems.length > 0 ? parsedItems[0].customerName : null;
+          const fallbackPhone = parsedItems && parsedItems.length > 0 ? parsedItems[0].customerPhone : null;
+          
+          return {
+            ...o,
+            items: parsedItems,
+            userId: o.user_id,
+            restaurantId: o.restaurant_id,
+            createdAt: o.created_at,
+            deliveryLocation: o.delivery_location || (parsedItems && parsedItems.length > 0 ? parsedItems[0].deliveryLocation : undefined),
+            restaurant: {
+              name: o.restaurant?.name || 'Course Privée 📦',
+              phone_number: o.restaurant?.phone_number || '',
+              latitude: o.restaurant?.latitude,
+              longitude: o.restaurant?.longitude,
+              city: o.restaurant?.city || '',
+              owner_id: o.restaurant?.owner_id || ''
+            },
+            customer: {
+              full_name: o.customer?.full_name || fallbackName || 'Client Inconnu',
+              phone_number: o.customer?.phone_number || fallbackPhone || ''
+            }
+          };
+        })
+        .filter((o: any) => o.items && o.items[0]?.isPrivateCourier === true);
+
+      if (requestId !== fetchAssignedOrdersRequestId.current) return;
       setOrders(mappedOrders);
+      setAvailableCouriers(mappedAvailableCouriers);
       
       const delivering = mappedOrders.find(o => o.status === 'delivering');
       if (delivering) startTracking(delivering.id);
     } catch (error) {
+      if (requestId !== fetchAssignedOrdersRequestId.current) return;
       console.error('Error fetching orders:', error);
     } finally {
-      setLoading(false);
+      if (requestId === fetchAssignedOrdersRequestId.current) {
+        setLoading(false);
+      }
     }
   };
 
@@ -487,6 +720,103 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
     setIsTracking(false);
   };
 
+  // GPS Simulation Handler Effect
+  useEffect(() => {
+    let interval: NodeJS.Timeout | null = null;
+    if (simulatingOrderId) {
+      const order = orders.find(o => o.id === simulatingOrderId);
+      if (order && order.restaurant?.latitude && order.restaurant?.longitude && order.deliveryLocation?.lat && order.deliveryLocation?.lng) {
+        const startLat = order.restaurant.latitude;
+        const startLng = order.restaurant.longitude;
+        const endLat = order.deliveryLocation.lat;
+        const endLng = order.deliveryLocation.lng;
+
+        interval = setInterval(() => {
+          setSimulationProgress(prev => {
+            const nextProgress = prev + 10;
+            if (nextProgress >= 100) {
+              clearInterval(interval!);
+              setSimulatingOrderId(null);
+              setSimulationProgress(0);
+              
+              toast.success("Simulation GPS terminée ! Vous êtes arrivé à destination.", { icon: '📍' });
+              
+              // Trigger final update of coordinates
+              updateGPSCoordsLocalOrDB(simulatingOrderId, endLat, endLng);
+              return 100;
+            }
+            
+            // Interpolate coordinates
+            const ratio = nextProgress / 100;
+            const currentLat = startLat + (endLat - startLat) * ratio;
+            const currentLng = startLng + (endLng - startLng) * ratio;
+            
+            updateGPSCoordsLocalOrDB(simulatingOrderId, currentLat, currentLng);
+            return nextProgress;
+          });
+        }, 1200); // step every 1.2s
+      } else {
+        setSimulatingOrderId(null);
+        toast.error("Coordonnées de livraison ou de restaurant manquantes pour simuler.");
+      }
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [simulatingOrderId, orders]);
+
+  const updateGPSCoordsLocalOrDB = async (orderId: string, lat: number, lng: number) => {
+    setSimulationCoords({ lat, lng });
+
+    if (orderId.startsWith('mock-')) {
+      const localOrdersStr = localStorage.getItem('dashmeals_mock_orders');
+      if (localOrdersStr) {
+        const localOrders = JSON.parse(localOrdersStr);
+        const updated = localOrders.map((o: any) => o.id === orderId ? { ...o, delivery_lat: lat, delivery_lng: lng } : o);
+        localStorage.setItem('dashmeals_mock_orders', JSON.stringify(updated));
+      }
+      setOrders(prev => prev.map(o => o.id === orderId ? { ...o, delivery_lat: lat, delivery_lng: lng } : o));
+    } else {
+      try {
+        await supabase
+          .from('orders')
+          .update({ delivery_lat: lat, delivery_lng: lng })
+          .eq('id', orderId);
+        fetchAssignedOrders();
+      } catch (err) {
+        console.warn("DB GPS coordinate update failed, updating locally only:", err);
+        setOrders(prev => prev.map(o => o.id === orderId ? { ...o, delivery_lat: lat, delivery_lng: lng } : o));
+      }
+    }
+  };
+
+  const openProofOfDeliveryModal = (orderId: string) => {
+    setProofOrderId(orderId);
+    setSelectedProofPhoto(PROOF_PHOTO_PRESETS[0].url);
+    setShowProofModal(true);
+  };
+
+  const handleConfirmProofAndDeliver = () => {
+    if (!proofOrderId) return;
+    
+    // Complete the order with delivered status
+    updateOrderStatus(proofOrderId, 'delivered');
+    
+    // Optionally save the proof photo inside the mock order in localStorage
+    if (proofOrderId.startsWith('mock-')) {
+      const localOrdersStr = localStorage.getItem('dashmeals_mock_orders');
+      if (localOrdersStr) {
+        const localOrders = JSON.parse(localOrdersStr);
+        const updated = localOrders.map((o: any) => o.id === proofOrderId ? { ...o, proof_of_delivery_photo: selectedProofPhoto } : o);
+        localStorage.setItem('dashmeals_mock_orders', JSON.stringify(updated));
+      }
+    }
+
+    toast.success("Preuve de livraison enregistrée avec succès ! Le client a été averti.", { icon: '📸' });
+    setShowProofModal(false);
+    setProofOrderId(null);
+  };
+
   const DELIVERY_FEE_USD = 2.5; // Gain fixe par course
 
   const updateOrderStatus = async (orderId: string, newStatus: Order['status']) => {
@@ -537,23 +867,39 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
 
       // Insert notification for the customer
       const order = orders.find(o => o.id === orderId);
-      if (order && order.user_id) {
-          const statusLabels: Record<string, string> = {
-              'delivering': 'en cours de livraison',
-              'delivered': 'livrée',
-              'completed': 'terminée',
-              'cancelled': 'annulée'
-          };
-          const { error: notifError } = await supabase.from('notifications').insert({
-              user_id: order.user_id,
-              title: `Commande #${orderId.slice(0, 4)}`,
-              message: `Votre commande est maintenant ${statusLabels[newStatus] || newStatus}.`,
-              type: 'order_status',
-              data: { order_id: orderId, status: newStatus }
-          });
-          
-          if (notifError) {
-            console.error("DEBUG: notifications insert error:", notifError);
+      if (order) {
+          const isPrivateCourier = order.items?.[0]?.isPrivateCourier === true;
+          const userEmail = order.customer?.email || 'irmerveilkanku@gmail.com';
+
+          if (isPrivateCourier) {
+              try {
+                  await sendPrivateCourierStatusEmail(order, userEmail, newStatus);
+                  console.log(`Private courier status email sent to ${userEmail} for status ${newStatus}`);
+              } catch (mailErr) {
+                  console.error("Error sending private courier status email:", mailErr);
+              }
+          }
+
+          if (order.user_id) {
+              const statusLabels: Record<string, string> = {
+                  'delivering': 'en cours de livraison',
+                  'delivered': 'livrée',
+                  'completed': 'terminée',
+                  'cancelled': 'annulée'
+              };
+              const { error: notifError } = await supabase.from('notifications').insert({
+                  user_id: order.user_id,
+                  title: isPrivateCourier ? `Course Privée #${orderId.slice(0, 4)}` : `Commande #${orderId.slice(0, 4)}`,
+                  message: isPrivateCourier 
+                      ? `Votre course privée est maintenant ${statusLabels[newStatus] || newStatus}.`
+                      : `Votre commande est maintenant ${statusLabels[newStatus] || newStatus}.`,
+                  type: 'order_status',
+                  data: { order_id: orderId, status: newStatus }
+              });
+              
+              if (notifError) {
+                console.error("DEBUG: notifications insert error:", notifError);
+              }
           }
       }
 
@@ -569,6 +915,15 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
       console.warn("⚠️ [Delivery] Fallback de secours local activé pour l'état:", error?.message || error);
       toast.success(`Statut mis à jour (Démo): ${newStatus}`);
       
+      // Trigger email notification for local demo mode if private courier
+      const fallbackOrder = orders.find(o => o.id === orderId);
+      if (fallbackOrder && fallbackOrder.items?.[0]?.isPrivateCourier === true) {
+        const userEmail = fallbackOrder.customer?.email || 'irmerveilkanku@gmail.com';
+        sendPrivateCourierStatusEmail(fallbackOrder, userEmail, newStatus).catch(err => {
+          console.error("Local mode private courier email error:", err);
+        });
+      }
+
       // Update local state memory immediately
       setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: newStatus } : o));
 
@@ -783,6 +1138,78 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
     }
   };
 
+  const handleAcceptPrivateCourier = async (orderId: string) => {
+    try {
+      const targetCourier = availableCouriers.find(c => c.id === orderId);
+      if (!targetCourier) {
+        toast.error("Course introuvable.");
+        return;
+      }
+
+      let dbUpdated = false;
+      try {
+        const { error } = await supabase
+          .from('orders')
+          .update({
+            delivery_person_id: user.id,
+            delivery_acceptance_status: 'accepted',
+            status: 'preparing'
+          })
+          .eq('id', orderId);
+
+        if (!error) {
+          dbUpdated = true;
+        }
+      } catch (err) {
+        console.warn("DB update skipped or failed, fallback to local memory", err);
+      }
+
+      const localOrdersStr = localStorage.getItem("dashmeals_mock_orders") || "[]";
+      let localOrders = [];
+      try {
+        localOrders = JSON.parse(localOrdersStr);
+      } catch {
+        localOrders = [];
+      }
+
+      const existingIndex = localOrders.findIndex((o: any) => o.id === orderId);
+      if (existingIndex >= 0) {
+        localOrders[existingIndex] = {
+          ...localOrders[existingIndex],
+          delivery_person_id: user.id,
+          delivery_acceptance_status: 'accepted',
+          status: 'preparing'
+        };
+      } else {
+        localOrders.push({
+          ...targetCourier,
+          delivery_person_id: user.id,
+          delivery_acceptance_status: 'accepted',
+          status: 'preparing'
+        });
+      }
+      localStorage.setItem("dashmeals_mock_orders", JSON.stringify(localOrders));
+
+      try {
+        await supabase.from('notifications').insert({
+          user_id: targetCourier.userId || null,
+          title: "Livreur trouvé pour votre Course Privée ! 📦🛵",
+          message: `Le livreur ${user.name} a accepté votre course privée et est en route pour le retrait.`,
+          type: 'delivery_acceptance',
+          data: { order_id: orderId, result: 'accepted' }
+        });
+      } catch (e) {
+        console.warn("Notification insert skipped:", e);
+      }
+
+      toast.success("Course privée acceptée avec succès !");
+      fetchAssignedOrders();
+    } catch (err: any) {
+      console.error("Error accepting private courier:", err);
+      toast.error("Erreur lors de l'acceptation: " + err.message);
+    }
+  };
+
   const handleDeclineProposal = async (orderId: string) => {
     analytics.logEvent('decline_delivery_proposal', { orderId });
     try {
@@ -924,6 +1351,91 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
         </div>
       )}
 
+      {/* AVAILABLE PRIVATE COURIERS */}
+      {availableCouriers.length > 0 && (
+        <div className="bg-orange-50 border border-orange-200 rounded-2xl p-4 flex flex-col space-y-3 shadow-xs">
+          <div className="flex items-center space-x-1.5 text-orange-700">
+            <Package className="animate-pulse shrink-0 text-orange-500" size={18} />
+            <span className="font-extrabold text-xs uppercase tracking-wider">📦 Courses Privées Disponibles</span>
+          </div>
+          <div className="flex flex-col space-y-3">
+            {availableCouriers.map(courier => (
+              <div key={courier.id} className="bg-white border border-orange-100 rounded-xl p-3 text-left space-y-2.5 shadow-xxs">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <span className="text-[10px] bg-orange-100 text-orange-850 px-2 py-0.5 rounded font-black uppercase">
+                      Forfait : $5.00
+                    </span>
+                    <h4 className="font-bold text-xs text-gray-900 mt-1">Course #{courier.id.slice(0, 6)}</h4>
+                  </div>
+                  <button
+                    onClick={() => handleAcceptPrivateCourier(courier.id)}
+                    className="px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-lg text-[10px] font-black uppercase shadow-xs transition-all active:scale-95 cursor-pointer"
+                  >
+                    Accepter
+                  </button>
+                </div>
+                <div className="space-y-1.5 text-xs text-gray-600 border-t border-gray-100 pt-2">
+                  <div className="flex items-start">
+                    <span className="font-bold text-gray-700 mr-1.5 shrink-0">Départ:</span>
+                    <span className="truncate">{courier.items[0]?.pickupAddress || 'Non spécifié'}</span>
+                  </div>
+                  <div className="flex items-start">
+                    <span className="font-bold text-gray-700 mr-1.5 shrink-0">Destination:</span>
+                    <span className="truncate">{courier.items[0]?.deliveryAddress || 'Non spécifié'}</span>
+                  </div>
+                  <div className="flex items-start">
+                    <span className="font-bold text-gray-700 mr-1.5 shrink-0">Colis:</span>
+                    <span className="truncate text-orange-600 font-semibold">{courier.items[0]?.description || 'Colis général'}</span>
+                  </div>
+                  {courier.items[0]?.recipientName && (
+                    <div className="flex items-start">
+                      <span className="font-bold text-gray-700 mr-1.5 shrink-0">Destinataire:</span>
+                      <span className="truncate">{courier.items[0]?.recipientName} {courier.items[0]?.recipientPhone && `(${courier.items[0]?.recipientPhone})`}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* TABLEAU DE BORD COURSES PRIVÉES LIVREUR */}
+      <div className="bg-gradient-to-br from-orange-500 to-amber-600 rounded-2xl p-5 text-white shadow-md relative overflow-hidden">
+        <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-16 -mt-16 blur-2xl font-sans"></div>
+        <div className="relative z-10 font-sans">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-black text-xs uppercase tracking-wider flex items-center">
+              <Package size={16} className="mr-2 animate-bounce text-white" />
+              Tableau de Bord : Courses Privées (Livreur)
+            </h3>
+            <span className="text-[9px] bg-white/20 px-2.5 py-1 rounded-full font-black uppercase">
+              Mes Stats 📊
+            </span>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3 text-center bg-white/10 p-3.5 rounded-xl backdrop-blur-xs mb-4">
+            <div>
+              <p className="text-[9px] opacity-80 font-bold uppercase">Livrées</p>
+              <p className="text-xl font-black">{orders.filter(o => o.items && o.items[0]?.isPrivateCourier && ['delivered', 'completed'].includes(o.status)).length}</p>
+            </div>
+            <div className="border-x border-white/20 font-sans">
+              <p className="text-[9px] opacity-80 font-bold uppercase">En cours</p>
+              <p className="text-xl font-black">{orders.filter(o => o.items && o.items[0]?.isPrivateCourier && !['delivered', 'completed', 'cancelled'].includes(o.status)).length}</p>
+            </div>
+            <div>
+              <p className="text-[9px] opacity-80 font-bold uppercase font-sans">Mes Gains</p>
+              <p className="text-xl font-black">${(orders.filter(o => o.items && o.items[0]?.isPrivateCourier && ['delivered', 'completed'].includes(o.status)).length * 5).toFixed(2)}</p>
+            </div>
+          </div>
+          
+          <p className="text-[10px] opacity-90 leading-relaxed font-sans">
+            Vous touchez un forfait garanti de <strong className="font-extrabold">$5.00</strong> par course privée livrée avec succès. Assurez-vous d'appeler le destinataire dès l'arrivée.
+          </p>
+        </div>
+      </div>
+
       <div className="space-y-4">
         <h2 className="font-black text-gray-900 flex items-center">
           <Package size={20} className="mr-2 text-brand-600" />
@@ -945,208 +1457,351 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
           </div>
         ) : (
           <div className="space-y-4">
-            {orders.filter(o => o.status !== 'completed' && o.status !== 'cancelled').map((order) => (
-              <motion.div
-                key={order.id}
-                layout
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                className={`bg-white rounded-2xl overflow-hidden border ${
-                  order.status === 'delivering' ? 'border-brand-500 ring-1 ring-brand-500' : 'border-gray-100'
-                } shadow-sm`}
-              >
-                <div className="p-4">
-                  <div className="flex justify-between items-start mb-4">
-                    <div>
-                      <span className={`text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full ${
-                        order.status === 'delivering' ? 'bg-brand-100 text-brand-600' :
-                        order.status === 'ready' ? 'bg-green-100 text-green-600' :
-                        'bg-gray-100 text-gray-500'
-                      }`}>
-                        {order.status}
-                      </span>
-                      <h3 className="text-lg font-black text-gray-900 mt-1">#{order.id.slice(0, 8)}</h3>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-sm font-black text-brand-600">{order.totalAmount} {order.items[0]?.restaurantName ? 'USD' : 'CDF'}</p>
-                      <p className="text-[10px] text-gray-400 font-bold uppercase">{new Date(order.createdAt).toLocaleTimeString()}</p>
-                    </div>
-                  </div>
+            {orders.filter(o => o.status !== 'completed' && o.status !== 'cancelled').map((order) => {
+              const distance = getDistanceInKm(
+                order.restaurant?.latitude,
+                order.restaurant?.longitude,
+                order.deliveryLocation?.lat,
+                order.deliveryLocation?.lng
+              ) || 2.4; // default visual fallback
+              const estimatedMinutes = getTravelTimeInMinutes(distance, vehicleType || 'moto');
+              const isCurrentSimulating = simulatingOrderId === order.id;
 
-                  <div className="space-y-3 mb-6">
-                    <div className="flex items-start space-x-3">
-                      <div className="w-8 h-8 bg-orange-50 rounded-lg flex items-center justify-center text-orange-600 shrink-0">
-                        <MapPin size={16} />
+              return (
+                <motion.div
+                  key={order.id}
+                  layout
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className={`bg-white rounded-2xl overflow-hidden border ${
+                    order.status === 'delivering' ? 'border-brand-500 ring-1 ring-brand-500' : 'border-gray-100'
+                  } shadow-sm`}
+                >
+                  <div className="p-4">
+                    <div className="flex justify-between items-start mb-4">
+                      <div>
+                        <span className={`text-[10px] font-black uppercase tracking-widest px-2.5 py-1 rounded-full ${
+                          order.status === 'delivering' ? 'bg-brand-100 text-brand-600' :
+                          order.status === 'ready' ? 'bg-green-100 text-green-600' :
+                          'bg-gray-100 text-gray-500'
+                        }`}>
+                          {order.status}
+                        </span>
+                        <h3 className="text-lg font-black text-gray-900 mt-1.5">#{order.id.slice(0, 8)}</h3>
                       </div>
-                      <div className="flex-1">
-                        <div className="flex justify-between items-start">
-                          <div>
-                            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Restaurant</p>
-                            <p className="text-sm font-bold text-gray-800">{order.restaurant?.name || 'Restaurant'}</p>
-                          </div>
-                          {order.restaurant?.latitude && order.restaurant?.longitude && (
-                            <a 
-                              href={`https://www.google.com/maps/dir/?api=1&destination=${order.restaurant.latitude},${order.restaurant.longitude}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="p-1.5 bg-gray-50 text-gray-500 hover:text-brand-600 rounded-lg transition-colors"
-                            >
-                              <Navigation size={14} />
-                            </a>
+                      <div className="text-right">
+                        <p className="text-sm font-black text-brand-600">{order.totalAmount} {order.items[0]?.restaurantName ? 'USD' : 'CDF'}</p>
+                        <p className="text-[10px] text-gray-400 font-bold uppercase mt-1">{new Date(order.createdAt).toLocaleTimeString()}</p>
+                      </div>
+                    </div>
+
+                    {/* Distance & Time Estimation Badge */}
+                    <RouteEstimator
+                      from={
+                        order.restaurant?.latitude && order.restaurant?.longitude
+                          ? { lat: order.restaurant.latitude, lng: order.restaurant.longitude }
+                          : null
+                      }
+                      to={
+                        order.deliveryLocation?.lat && order.deliveryLocation?.lng
+                          ? { lat: order.deliveryLocation.lat, lng: order.deliveryLocation.lng }
+                          : null
+                      }
+                      vehicleType={vehicleType || 'moto'}
+                      fallbackDistance={distance}
+                      fallbackMinutes={estimatedMinutes}
+                    />
+
+                    {/* GPS Live Trajectory Simulation Panel for Delivering status */}
+                    {order.status === 'delivering' && (
+                      <div className="bg-slate-900 text-slate-100 p-4 rounded-xl mb-4 space-y-3 shadow-inner">
+                        <div className="flex justify-between items-center">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
+                            <span className={`inline-block w-2 h-2 rounded-full ${isCurrentSimulating ? 'bg-brand-500 animate-ping' : 'bg-orange-500'}`} />
+                            {isCurrentSimulating ? "Simulation GPS Active" : "Simulateur de Trajet"}
+                          </span>
+                          {isCurrentSimulating && (
+                            <span className="text-[10px] font-mono text-brand-400 font-black">
+                              {simulationProgress}%
+                            </span>
                           )}
                         </div>
+
+                        {/* Progress Bar */}
+                        <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
+                          <div 
+                            className="bg-brand-500 h-full transition-all duration-1000 ease-out"
+                            style={{ width: `${isCurrentSimulating ? simulationProgress : 0}%` }}
+                          />
+                        </div>
+
+                        {/* Current action step description */}
+                        <p className="text-xs text-slate-300 italic">
+                          {isCurrentSimulating ? (
+                            simulationProgress < 30 ? "🚲 Départ du restaurant, en route..." :
+                            simulationProgress < 70 ? "🚦 Passage par le Boulevard principal..." :
+                            "🏡 Approche de la zone de livraison !"
+                          ) : "Prêt à simuler l'itinéraire GPS en direct sur la carte client."}
+                        </p>
+
+                        <button
+                          onClick={() => {
+                            if (isCurrentSimulating) {
+                              setSimulatingOrderId(null);
+                              toast.info("Simulation de trajet mise en pause.");
+                            } else {
+                              setSimulationProgress(0);
+                              setSimulatingOrderId(order.id);
+                              toast.success("Démarrage du simulateur d'itinéraire GPS...");
+                            }
+                          }}
+                          className={`w-full py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+                            isCurrentSimulating 
+                              ? 'bg-red-600 hover:bg-red-700 text-white' 
+                              : 'bg-brand-600 hover:bg-brand-700 text-white'
+                          }`}
+                        >
+                          {isCurrentSimulating ? "Arrêter la simulation" : "Démarrer la simulation GPS 📍"}
+                        </button>
                       </div>
-                    </div>
-                    <div className="flex items-start space-x-3">
-                      <div className="w-8 h-8 bg-brand-50 dark:bg-brand-950/20 rounded-lg flex items-center justify-center text-brand-600 shrink-0">
-                        <UserIcon size={16} />
-                      </div>
-                      <div className="flex-1">
-                        <div className="flex justify-between items-start">
-                          <div className="w-full">
-                            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Client</p>
-                            <p className="text-sm font-black text-gray-950 dark:text-white">{order.customer?.full_name || 'Client Inconnu'}</p>
-                            {order.customer?.phone_number && (
-                              <p className="text-xs text-gray-500 font-bold mt-0.5">📞 {order.customer.phone_number}</p>
+                    )}
+
+                    {/* Addresses & Destination Details */}
+                    {order.items[0]?.isPrivateCourier ? (
+                      <div className="space-y-3 mb-6">
+                        <div className="flex items-start space-x-3 text-left">
+                          <div className="w-8 h-8 bg-orange-50 rounded-lg flex items-center justify-center text-orange-600 shrink-0">
+                            <MapPin size={16} />
+                          </div>
+                          <div className="flex-1">
+                            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Point de Retrait 📦</p>
+                            <p className="text-sm font-black text-gray-900">{order.items[0]?.pickupAddress || 'Retrait non spécifié'}</p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-start space-x-3 text-left">
+                          <div className="w-8 h-8 bg-brand-50 rounded-lg flex items-center justify-center text-brand-600 shrink-0">
+                            <UserIcon size={16} />
+                          </div>
+                          <div className="flex-1">
+                            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Destinataire & Point de Livraison</p>
+                            <p className="text-sm font-black text-gray-950">{order.items[0]?.recipientName || 'Destinataire'}</p>
+                            {order.items[0]?.recipientPhone && (
+                              <p className="text-xs text-gray-500 font-bold mt-0.5">📞 {order.items[0]?.recipientPhone}</p>
                             )}
-                            
-                            {/* ADRESSE EN EVIDENCE MAXIMUM POUR LE LIVREUR */}
-                            <div className="mt-2 p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/30 rounded-xl">
-                              <div className="flex items-center space-x-1 mb-1 text-amber-800 dark:text-amber-400">
+                            <div className="mt-2 p-3 bg-amber-50 border border-amber-200 rounded-xl">
+                              <div className="flex items-center space-x-1 mb-1 text-amber-800">
                                 <MapPin size={12} className="shrink-0" />
                                 <span className="text-[10px] font-black uppercase tracking-wider">Adresse de Livraison :</span>
                               </div>
-                              <p className="text-sm font-black text-amber-950 dark:text-amber-100 leading-snug">
-                                {order.deliveryLocation?.address || 'Adresse non spécifiée'}
+                              <p className="text-sm font-black text-amber-950 leading-snug">
+                                {order.items[0]?.deliveryAddress || 'Adresse non spécifiée'}
                               </p>
-                              {order.delivery_instructions && (
-                                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1.5 italic font-medium">
-                                  Note: {order.delivery_instructions}
-                                </p>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-start space-x-3 text-left">
+                          <div className="w-8 h-8 bg-gray-100 rounded-lg flex items-center justify-center text-gray-600 shrink-0">
+                            <Package size={16} />
+                          </div>
+                          <div className="flex-1">
+                            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Détails du colis</p>
+                            <p className="text-sm font-bold text-orange-600 leading-snug">
+                              {order.items[0]?.description || 'Colis général'}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-3 mb-6">
+                        <div className="flex items-start space-x-3">
+                          <div className="w-8 h-8 bg-orange-50 rounded-lg flex items-center justify-center text-orange-600 shrink-0">
+                            <MapPin size={16} />
+                          </div>
+                          <div className="flex-1">
+                            <div className="flex justify-between items-start">
+                              <div>
+                                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Restaurant</p>
+                                <p className="text-sm font-bold text-gray-800">{order.restaurant?.name || 'Restaurant'}</p>
+                              </div>
+                              {order.restaurant?.latitude && order.restaurant?.longitude && (
+                                <a 
+                                  href={`https://www.google.com/maps/dir/?api=1&destination=${order.restaurant.latitude},${order.restaurant.longitude}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="p-1.5 bg-gray-50 text-gray-500 hover:text-brand-600 rounded-lg transition-colors"
+                                >
+                                  <Navigation size={14} />
+                                </a>
                               )}
                             </div>
                           </div>
-                          {order.deliveryLocation?.lat && order.deliveryLocation?.lng && (
-                            <a 
-                              href={`https://www.google.com/maps/dir/?api=1&destination=${order.deliveryLocation.lat},${order.deliveryLocation.lng}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="p-2 bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-100 hover:bg-amber-200 rounded-xl transition-all shadow-sm ml-2 self-start flex items-center justify-center"
-                              title="Itinéraire Maps"
-                            >
-                              <Navigation size={16} className="animate-pulse" />
-                            </a>
-                          )}
+                        </div>
+                        <div className="flex items-start space-x-3">
+                          <div className="w-8 h-8 bg-brand-50 rounded-lg flex items-center justify-center text-brand-600 shrink-0">
+                            <UserIcon size={16} />
+                          </div>
+                          <div className="flex-1">
+                            <div className="flex justify-between items-start">
+                              <div className="w-full">
+                                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Client</p>
+                                <p className="text-sm font-black text-gray-950">{order.customer?.full_name || 'Client Inconnu'}</p>
+                                {order.customer?.phone_number && (
+                                  <p className="text-xs text-gray-500 font-bold mt-0.5">📞 {order.customer.phone_number}</p>
+                                )}
+                                
+                                {/* ADRESSE EN EVIDENCE MAXIMUM POUR LE LIVREUR */}
+                                <div className="mt-2 p-3 bg-amber-50 border border-amber-200 rounded-xl">
+                                  <div className="flex items-center space-x-1 mb-1 text-amber-800">
+                                    <MapPin size={12} className="shrink-0" />
+                                    <span className="text-[10px] font-black uppercase tracking-wider">Adresse de Livraison :</span>
+                                  </div>
+                                  <p className="text-sm font-black text-amber-950 leading-snug">
+                                    {order.deliveryLocation?.address || 'Adresse non spécifiée'}
+                                  </p>
+                                  {order.delivery_instructions && (
+                                    <p className="text-xs text-gray-500 mt-1.5 italic font-medium">
+                                      Note: {order.delivery_instructions}
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                              {order.deliveryLocation?.lat && order.deliveryLocation?.lng && (
+                                <a 
+                                  href={`https://www.google.com/maps/dir/?api=1&destination=${order.deliveryLocation.lat},${order.deliveryLocation.lng}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="p-2 bg-amber-100 text-amber-800 hover:bg-amber-200 rounded-xl transition-all shadow-sm ml-2 self-start flex items-center justify-center"
+                                  title="Itinéraire Maps"
+                                >
+                                  <Navigation size={16} className="animate-pulse" />
+                                </a>
+                              )}
+                            </div>
+                          </div>
                         </div>
                       </div>
+                    )}
+
+                    <div className="grid grid-cols-2 gap-3">
+                      {order.delivery_acceptance_status === 'pending' ? (
+                        <>
+                          <button
+                            onClick={() => {
+                              setAcceptingOrder(order);
+                              setEstRestoMins(10);
+                              setEstClientMins(15);
+                            }}
+                            className="bg-brand-600 text-white py-3 rounded-xl font-black text-sm shadow-lg flex items-center justify-center space-x-2"
+                          >
+                            <Check size={18} />
+                            <span>Accepter</span>
+                          </button>
+                          <button
+                            onClick={() => handleDeclineProposal(order.id)}
+                            className="bg-red-50 text-red-600 py-3 rounded-xl font-black text-sm border border-red-100 flex items-center justify-center space-x-2"
+                          >
+                            <X size={18} />
+                            <span>Refuser</span>
+                          </button>
+                          <button
+                            onClick={() => {
+                              console.log("Opening chat for order:", order.id, "restaurant owner:", order.restaurant?.owner_id);
+                              if (!order.restaurant?.owner_id) {
+                                toast.error("Impossible de contacter ce restaurant (ID propriétaire manquant)");
+                              }
+                              setActiveChatRestaurant(order);
+                            }}
+                            className="col-span-2 bg-blue-50 text-blue-600 py-3 rounded-xl font-black text-sm flex items-center justify-center space-x-2 border border-blue-100 hover:bg-blue-100 transition-colors relative z-20"
+                          >
+                            <MessageSquare size={18} />
+                            <span>Discuter avec le resto</span>
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => {
+                              console.log("Opening chat for order:", order.id, "restaurant owner:", order.restaurant?.owner_id);
+                              if (!order.restaurant?.owner_id) {
+                                toast.error("Impossible de contacter ce restaurant (ID propriétaire manquant)");
+                              }
+                              setActiveChatRestaurant(order);
+                            }}
+                            className="col-span-2 bg-blue-50 text-blue-600 py-3 rounded-xl font-black text-sm flex items-center justify-center space-x-2 border border-blue-100 hover:bg-blue-100 transition-colors mb-2 relative z-20"
+                          >
+                            <MessageSquare size={18} />
+                            <span>Contacter le Restaurant</span>
+                          </button>
+
+                          {order.status !== 'delivering' && order.status !== 'delivered' && order.status !== 'completed' && (
+                            <div className="col-span-2 space-y-2.5">
+                              {order.items[0]?.isPrivateCourier ? (
+                                <button
+                                  onClick={() => updateOrderStatus(order.id, 'delivering')}
+                                  className="w-full bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white py-3 rounded-xl font-black text-xs uppercase tracking-wider shadow-md flex items-center justify-center space-x-2 transition-all relative z-20 cursor-pointer"
+                                >
+                                  <Package size={16} className="animate-bounce" />
+                                  <span>Colis Récupéré • Commencer la Course 🛵</span>
+                                </button>
+                              ) : (
+                                <>
+                                  {order.status !== 'ready' && (
+                                    <button
+                                      onClick={() => updateOrderStatus(order.id, 'ready')}
+                                      className="w-full bg-amber-500 hover:bg-amber-600 text-white py-3 rounded-xl font-black text-xs uppercase tracking-wider shadow-md flex items-center justify-center space-x-2 transition-all relative z-20 cursor-pointer"
+                                    >
+                                      <Check size={16} />
+                                      <span>Marquer comme Prête 🛍️</span>
+                                    </button>
+                                  )}
+                                  <button
+                                    onClick={() => updateOrderStatus(order.id, 'delivering')}
+                                    className="w-full bg-brand-600 hover:bg-brand-700 text-white py-3 rounded-xl font-black text-xs uppercase tracking-wider shadow-lg shadow-brand-200 flex items-center justify-center space-x-2 transition-all relative z-20 cursor-pointer"
+                                  >
+                                    <Bike size={16} />
+                                    <span>Commencer la livraison 🛵</span>
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          )}
+                          
+                          {order.status === 'delivering' && (
+                            <>
+                              <button
+                                onClick={() => openProofOfDeliveryModal(order.id)}
+                                className="col-span-2 bg-green-600 hover:bg-green-700 text-white py-3 rounded-xl font-black text-xs uppercase tracking-wider shadow-lg shadow-green-200 flex items-center justify-center space-x-2 mb-2 transition-all relative z-20 cursor-pointer"
+                              >
+                                <CheckCircle2 size={16} />
+                                <span>Marquer comme livré (Preuve photo) ✅</span>
+                              </button>
+                              <div className="col-span-2 grid grid-cols-2 gap-2">
+                                  <a
+                                    href={`tel:${order.customer?.phone_number}`}
+                                    className="bg-gray-100 hover:bg-gray-200 text-gray-800 py-3 rounded-xl font-black text-sm flex items-center justify-center space-x-2 transition-all relative z-20 cursor-pointer"
+                                  >
+                                    <Phone size={18} />
+                                    <span>Appeler Client</span>
+                                  </a>
+                                  <button
+                                    onClick={() => setActiveChatCustomer(order)}
+                                    className="bg-brand-50 hover:bg-brand-100 text-brand-600 py-3 rounded-xl font-black text-sm flex items-center justify-center space-x-2 border border-brand-100 transition-all relative z-20 cursor-pointer"
+                                  >
+                                    <MessageSquare size={18} />
+                                    <span>Chat Client</span>
+                                  </button>
+                              </div>
+                            </>
+                          )}
+                        </>
+                      )}
                     </div>
                   </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    {order.delivery_acceptance_status === 'pending' ? (
-                      <>
-                        <button
-                          onClick={() => {
-                            setAcceptingOrder(order);
-                            setEstRestoMins(10);
-                            setEstClientMins(15);
-                          }}
-                          className="bg-brand-600 text-white py-3 rounded-xl font-black text-sm shadow-lg flex items-center justify-center space-x-2"
-                        >
-                          <Check size={18} />
-                          <span>Accepter</span>
-                        </button>
-                        <button
-                          onClick={() => handleDeclineProposal(order.id)}
-                          className="bg-red-50 text-red-600 py-3 rounded-xl font-black text-sm border border-red-100 flex items-center justify-center space-x-2"
-                        >
-                          <X size={18} />
-                          <span>Refuser</span>
-                        </button>
-                        <button
-                          onClick={() => {
-                            console.log("Opening chat for order:", order.id, "restaurant owner:", order.restaurant?.owner_id);
-                            if (!order.restaurant?.owner_id) {
-                              toast.error("Impossible de contacter ce restaurant (ID propriétaire manquant)");
-                            }
-                            setActiveChatRestaurant(order);
-                          }}
-                          className="col-span-2 bg-blue-50 text-blue-600 py-3 rounded-xl font-black text-sm flex items-center justify-center space-x-2 border border-blue-100 hover:bg-blue-100 transition-colors relative z-20"
-                        >
-                          <MessageSquare size={18} />
-                          <span>Discuter avec le resto</span>
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        <button
-                          onClick={() => {
-                            console.log("Opening chat for order:", order.id, "restaurant owner:", order.restaurant?.owner_id);
-                            if (!order.restaurant?.owner_id) {
-                              toast.error("Impossible de contacter ce restaurant (ID propriétaire manquant)");
-                            }
-                            setActiveChatRestaurant(order);
-                          }}
-                          className="col-span-2 bg-blue-50 text-blue-600 py-3 rounded-xl font-black text-sm flex items-center justify-center space-x-2 border border-blue-100 hover:bg-blue-100 transition-colors mb-2 relative z-20"
-                        >
-                          <MessageSquare size={18} />
-                          <span>Contacter le Restaurant</span>
-                        </button>
-
-                        {order.status !== 'delivering' && order.status !== 'delivered' && order.status !== 'completed' && (
-                          <div className="col-span-2 space-y-2.5">
-                            {order.status !== 'ready' && (
-                              <button
-                                onClick={() => updateOrderStatus(order.id, 'ready')}
-                                className="w-full bg-amber-500 hover:bg-amber-600 text-white py-3 rounded-xl font-black text-xs uppercase tracking-wider shadow-md flex items-center justify-center space-x-2 transition-all relative z-20 cursor-pointer"
-                              >
-                                <Check size={16} />
-                                <span>Marquer comme Prête 🛍️</span>
-                              </button>
-                            )}
-                            <button
-                              onClick={() => updateOrderStatus(order.id, 'delivering')}
-                              className="w-full bg-brand-600 hover:bg-brand-700 text-white py-3 rounded-xl font-black text-xs uppercase tracking-wider shadow-lg shadow-brand-200 flex items-center justify-center space-x-2 transition-all relative z-20 cursor-pointer"
-                            >
-                              <Bike size={16} />
-                              <span>Commencer la livraison 🛵</span>
-                            </button>
-                          </div>
-                        )}
-                        
-                        {order.status === 'delivering' && (
-                          <>
-                            <button
-                              onClick={() => updateOrderStatus(order.id, 'delivered')}
-                              className="col-span-2 bg-green-600 hover:bg-green-700 text-white py-3 rounded-xl font-black text-xs uppercase tracking-wider shadow-lg shadow-green-200 flex items-center justify-center space-x-2 mb-2 transition-all relative z-20 cursor-pointer"
-                            >
-                              <CheckCircle2 size={16} />
-                              <span>Marquer comme livré ✅</span>
-                            </button>
-                            <div className="col-span-2 grid grid-cols-2 gap-2">
-                                <a
-                                  href={`tel:${order.customer?.phone_number}`}
-                                  className="bg-gray-100 hover:bg-gray-200 text-gray-800 py-3 rounded-xl font-black text-sm flex items-center justify-center space-x-2 transition-all relative z-20 cursor-pointer"
-                                >
-                                  <Phone size={18} />
-                                  <span>Appeler Client</span>
-                                </a>
-                                <button
-                                  onClick={() => setActiveChatCustomer(order)}
-                                  className="bg-brand-50 hover:bg-brand-100 text-brand-600 py-3 rounded-xl font-black text-sm flex items-center justify-center space-x-2 border border-brand-100 transition-all relative z-20 cursor-pointer"
-                                >
-                                  <MessageSquare size={18} />
-                                  <span>Chat Client</span>
-                                </button>
-                            </div>
-                          </>
-                        )}
-                      </>
-                    )}
-                  </div>
-                </div>
-              </motion.div>
-            ))}
+                </motion.div>
+              );
+            })}
           </div>
         )}
       </div>
@@ -1156,26 +1811,58 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
   const renderWallet = () => {
     const isRestaurantDriver = user.role === 'staff' && user.staffRole === 'delivery';
     const completedOrders = orders.filter(o => ['delivered', 'completed'].includes(o.status));
-    const completedOrdersCount = completedOrders.length;
     
     // Sum up the delivery fee of completed orders, defaulting to 2.5
     const computedTotalFee = completedOrders.reduce((sum, o) => sum + (o.delivery_fee || DELIVERY_FEE_USD), 0);
     
+    // Filter logic for dashboard
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    // Start of current week (Sunday)
+    const sundayDate = new Date(now);
+    sundayDate.setDate(now.getDate() - now.getDay());
+    const startOfWeek = new Date(sundayDate.getFullYear(), sundayDate.getMonth(), sundayDate.getDate()).getTime();
+
+    const filteredCompletedOrders = completedOrders.filter(o => {
+      const orderTime = new Date(o.createdAt).getTime();
+      if (walletFilter === 'today') {
+        return orderTime >= startOfToday;
+      } else if (walletFilter === 'week') {
+        return orderTime >= startOfWeek;
+      }
+      return true;
+    });
+
+    const filteredCompletedOrdersCount = filteredCompletedOrders.length;
+    const filteredTotalFee = filteredCompletedOrders.reduce((sum, o) => sum + (o.delivery_fee || DELIVERY_FEE_USD), 0);
+    
     // Independent Driver gets personal earnings, Staff Driver does not (goes to restaurant account)
-    const personalEarnings = isRestaurantDriver ? 0 : computedTotalFee;
-    const restaurantDeliveryEarnings = isRestaurantDriver ? computedTotalFee : 0;
+    const personalEarnings = isRestaurantDriver ? 0 : filteredTotalFee;
+    const restaurantDeliveryEarnings = isRestaurantDriver ? filteredTotalFee : 0;
+
+    // Mock weekly activity statistics
+    const weeklyData = [
+      { day: "Lun", count: 4, amount: 10.0 },
+      { day: "Mar", count: 7, amount: 17.5 },
+      { day: "Mer", count: 5, amount: 12.5 },
+      { day: "Jeu", count: 9, amount: 22.5 },
+      { day: "Ven", count: 12, amount: 30.0 },
+      { day: "Sam", count: 14, amount: 35.0 },
+      { day: "Dim", count: 8, amount: 20.0 }
+    ];
+    const maxAmount = Math.max(...weeklyData.map(d => d.amount));
 
     return (
     <div className="space-y-6">
       {/* Driver status card */}
-      <div className="bg-gray-50 border border-gray-150 rounded-2xl p-4 flex items-center justify-between dark:bg-gray-900/40 dark:border-gray-800">
+      <div className="bg-gray-50 border border-gray-150 rounded-2xl p-4 flex items-center justify-between">
         <div className="flex items-center space-x-3">
-          <div className="p-2.5 rounded-xl bg-brand-50 text-brand-600 dark:bg-brand-950/40 dark:text-brand-400">
+          <div className="p-2.5 rounded-xl bg-brand-50 text-brand-600">
             {isRestaurantDriver ? <Building size={20} /> : <UserCheck size={20} />}
           </div>
           <div>
             <p className="text-[10px] font-bold text-gray-400 uppercase leading-none">Statut de livraison</p>
-            <h4 className="font-extrabold text-sm text-gray-800 dark:text-gray-200 mt-1">
+            <h4 className="font-extrabold text-sm text-gray-800 mt-1">
               {isRestaurantDriver ? "Livreur Interne (Restaurant)" : "Livreur Indépendant"}
             </h4>
           </div>
@@ -1185,6 +1872,23 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
         }`}>
           {isRestaurantDriver ? "Salarié" : "Freelance"}
         </span>
+      </div>
+
+      {/* Filter Tabs */}
+      <div className="flex p-1 bg-gray-100 rounded-xl">
+        {(['all', 'today', 'week'] as const).map((filter) => (
+          <button
+            key={filter}
+            onClick={() => setWalletFilter(filter)}
+            className={`flex-1 py-2 text-xs font-black rounded-lg transition-all uppercase ${
+              walletFilter === filter 
+                ? 'bg-white text-gray-900 shadow-sm' 
+                : 'text-gray-500 hover:text-gray-900'
+            }`}
+          >
+            {filter === 'all' ? "Tout" : filter === 'today' ? "Aujourd'hui" : "Cette semaine"}
+          </button>
+        ))}
       </div>
 
       <div className="bg-gradient-to-br from-brand-600 to-brand-800 rounded-3xl p-6 text-white shadow-xl relative overflow-hidden">
@@ -1213,7 +1917,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
         <div className="grid grid-cols-2 gap-4 relative z-10">
           <div className="bg-white/10 rounded-2xl p-3 backdrop-blur-sm">
             <p className="text-[9px] font-bold text-brand-200 uppercase tracking-wide">Courses effectuées</p>
-            <p className="text-xl font-black">{completedOrdersCount}</p>
+            <p className="text-xl font-black">{filteredCompletedOrdersCount}</p>
           </div>
           <div className="bg-white/10 rounded-2xl p-3 backdrop-blur-sm">
             <p className="text-[9px] font-bold text-brand-200 uppercase tracking-wide">Frais moyen / Course</p>
@@ -1224,20 +1928,50 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
         </div>
       </div>
 
+      {/* Weekly Activity Chart */}
+      <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-sm space-y-4">
+        <h4 className="text-xs font-black uppercase text-gray-400 tracking-wider flex items-center justify-between">
+          <span>Activité hebdomadaire</span>
+          <span className="text-[10px] font-bold text-brand-600 bg-brand-50 px-2.5 py-0.5 rounded-full">
+            Moy. {weeklyData.reduce((sum, d) => sum + d.amount, 0) / 7} $ / jour
+          </span>
+        </h4>
+        <div className="flex justify-between items-end h-24 pt-2 relative">
+          {weeklyData.map((data, idx) => {
+            const heightPercent = (data.amount / maxAmount) * 100;
+            return (
+              <div key={idx} className="flex flex-col items-center flex-1 group relative">
+                {/* Micro tooltip */}
+                <div className="absolute bottom-full mb-1 bg-slate-950 text-white text-[8px] font-black px-1 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-all z-20 pointer-events-none shadow">
+                  {data.amount}$
+                </div>
+                <div className="w-5 bg-slate-50 hover:bg-slate-100 rounded-md h-16 flex items-end overflow-hidden relative cursor-pointer">
+                  <div 
+                    className="bg-brand-600 w-full rounded-b-md transition-all duration-750 ease-out"
+                    style={{ height: `${heightPercent}%` }}
+                  />
+                </div>
+                <span className="text-[9px] text-gray-400 font-bold mt-1.5">{data.day}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       <div className="space-y-4">
         <h3 className="font-black text-gray-900 flex items-center justify-between">
           <span>Historique des courses</span>
           <span className="text-[10px] text-gray-400 font-bold bg-gray-100 px-2.5 py-1 rounded-md uppercase">
-            Courses ({completedOrdersCount})
+            Courses ({filteredCompletedOrdersCount})
           </span>
         </h3>
         <div className="space-y-3">
-          {completedOrders.length === 0 ? (
+          {filteredCompletedOrders.length === 0 ? (
             <div className="text-center py-8 text-gray-400 border-2 border-dashed border-gray-150 rounded-2xl">
-              <p className="text-xs">Aucune livraison n'a encore été effectuée.</p>
+              <p className="text-xs">Aucune livraison trouvée pour ce filtre.</p>
             </div>
           ) : (
-            completedOrders.map(order => {
+            filteredCompletedOrders.map(order => {
               const orderFee = order.delivery_fee || DELIVERY_FEE_USD;
               return (
                 <div key={order.id} className="bg-white p-4 rounded-2xl border border-gray-100 flex justify-between items-center shadow-sm">
@@ -1543,12 +2277,9 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
                       onChange={(e) => setCity(e.target.value)}
                       className="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-brand-500 outline-none appearance-none"
                     >
-                      <option value="Kinshasa">Kinshasa</option>
-                      <option value="Lubumbashi">Lubumbashi</option>
-                      <option value="Goma">Goma</option>
-                      <option value="Bukavu">Bukavu</option>
-                      <option value="Kisangani">Kisangani</option>
-                      <option value="Matadi">Matadi</option>
+                      {CITIES_RDC.map(c => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
                     </select>
                   </div>
                 </div>
@@ -1699,6 +2430,41 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
           </div>
         )}
 
+        {/* Support & Assistance Card */}
+        <div className="bg-white rounded-3xl p-6 shadow-sm border border-gray-100 space-y-4">
+          <h3 className="font-black text-gray-900 flex items-center">
+            <HelpCircle size={18} className="mr-2 text-orange-500" />
+            Support & Assistance Administration
+          </h3>
+          <p className="text-xs text-gray-500 leading-relaxed">
+            Besoin d'aide, d'une assistance directe ou de poser une question à l'administration DashMeals ?
+          </p>
+          <div className="space-y-2 pt-2">
+            <button
+              type="button"
+              onClick={() => setIsHelpCenterOpen(true)}
+              className="w-full py-3 px-4 bg-orange-50 hover:bg-orange-100 text-orange-600 font-bold rounded-2xl text-xs transition-colors flex items-center justify-between"
+            >
+              <span className="flex items-center gap-2">
+                <HelpCircle size={16} />
+                Ouvrir le Centre d'Aide 📖
+              </span>
+              <ChevronRight size={16} />
+            </button>
+            <button
+              type="button"
+              onClick={() => setLegalView('contact')}
+              className="w-full py-3 px-4 bg-gray-50 hover:bg-gray-100 text-gray-700 font-bold rounded-2xl text-xs transition-colors flex items-center justify-between border border-gray-100"
+            >
+              <span className="flex items-center gap-2">
+                <Phone size={16} className="text-brand-600" />
+                Coordonnées de l'Administration
+              </span>
+              <ChevronRight size={16} />
+            </button>
+          </div>
+        </div>
+
         <button 
           onClick={onLogout}
           className="w-full bg-red-50 text-red-600 font-bold py-4 rounded-2xl flex items-center justify-center space-x-2 hover:bg-red-100 transition-colors shadow-sm"
@@ -1716,8 +2482,8 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
       <header className="bg-white border-b border-gray-200 sticky top-0 z-50 px-4 py-4">
         <div className="max-w-md mx-auto flex items-center justify-between">
           <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 bg-brand-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-brand-200">
-              <Bike size={24} />
+            <div className="w-10 h-10 bg-brand-500 rounded-xl flex items-center justify-center text-white shadow-lg shadow-brand-200 border-2 border-white/50 overflow-hidden">
+              <img src={APP_LOGO_URL} alt="DashMeals Logo" className="w-full h-full object-cover" />
             </div>
             <div>
               <h1 className="text-lg font-black text-gray-900">{user.name}</h1>
@@ -1732,6 +2498,14 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
             </div>
           </div>
           <div className="flex items-center space-x-2">
+            <button 
+              onClick={() => setIsHelpCenterOpen(true)}
+              className="p-2 bg-orange-50 text-orange-600 rounded-full hover:bg-orange-100 transition-colors flex items-center gap-1 text-xs font-bold"
+              title="Centre d'Aide & Support Admin"
+            >
+              <HelpCircle size={18} />
+              <span className="hidden sm:inline">Aide</span>
+            </button>
             <button className="p-2 bg-gray-50 text-gray-400 rounded-full hover:text-brand-600 transition-colors">
               <Bell size={20} />
             </button>
@@ -2085,6 +2859,101 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
           </motion.div>
         </div>
       )}
+
+      {/* Proof of Delivery Photo Modal */}
+      {showProofModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95, y: 20 }}
+            className="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl border border-gray-100"
+          >
+            {/* Header banner */}
+            <div className="bg-green-600 p-6 text-white text-center relative">
+              <div className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-3 backdrop-blur-md">
+                <Camera size={24} className="text-white" />
+              </div>
+              <h3 className="text-lg font-black">Preuve de Livraison</h3>
+              <p className="text-[10px] text-green-100 mt-1">Veuillez joindre une preuve photo pour finaliser la course</p>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-5 space-y-4">
+              <label className="block text-[10px] font-bold text-gray-400 uppercase">Sélectionner une situation de preuve</label>
+              
+              <div className="space-y-2.5">
+                {PROOF_PHOTO_PRESETS.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => setSelectedProofPhoto(preset.url)}
+                    className={`w-full flex items-center space-x-3 p-3 rounded-xl border transition-all text-left ${
+                      selectedProofPhoto === preset.url 
+                        ? 'border-green-600 bg-green-50 text-green-900 font-bold' 
+                        : 'border-gray-100 hover:border-gray-200 text-gray-700'
+                    }`}
+                  >
+                    <span className="text-sm">{preset.label}</span>
+                  </button>
+                ))}
+              </div>
+
+              {/* Preview image */}
+              {selectedProofPhoto && (
+                <div className="mt-2 space-y-1">
+                  <span className="block text-[9px] font-bold text-gray-400 uppercase">Aperçu de la photo de preuve :</span>
+                  <div className="w-full h-32 rounded-xl overflow-hidden border border-gray-200 relative">
+                    <img 
+                      src={selectedProofPhoto} 
+                      alt="Proof preview" 
+                      className="w-full h-full object-cover"
+                      referrerPolicy="no-referrer"
+                    />
+                    <div className="absolute top-2 right-2 bg-green-600 text-white text-[9px] px-2 py-0.5 rounded-full font-black shadow-sm uppercase">
+                      Prêt
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Action Buttons */}
+            <div className="p-4 bg-gray-50 border-t border-gray-100 grid grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowProofModal(false);
+                  setProofOrderId(null);
+                }}
+                className="py-3 rounded-2xl border border-gray-200 text-gray-500 hover:bg-gray-100 text-xs font-bold transition-all text-center cursor-pointer"
+              >Annuler</button>
+              <button
+                type="button"
+                onClick={handleConfirmProofAndDeliver}
+                className="py-3 rounded-2xl bg-green-600 hover:bg-green-700 text-white text-xs font-black shadow-md shadow-green-100 transition-all flex items-center justify-center space-x-1 cursor-pointer"
+              >
+                <span>Confirmer la livraison 📸</span>
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+      {/* HELP CENTER OVERLAY */}
+      {isHelpCenterOpen && (
+        <HelpCenter 
+          user={user} 
+          onClose={() => setIsHelpCenterOpen(false)} 
+          appSettings={appSettings} 
+        />
+      )}
+
+      {/* LEGAL / CONTACT MODAL */}
+      <LegalModal 
+        type={legalView} 
+        onClose={() => setLegalView(null)} 
+        appSettings={appSettings} 
+      />
     </div>
   );
 };

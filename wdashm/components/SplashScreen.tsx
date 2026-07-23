@@ -24,8 +24,8 @@ export const SplashScreen = ({ onFinish }: { onFinish: () => void }) => {
             className="w-full h-full object-cover"
         />
         <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent flex flex-col items-center justify-end pb-20">
-            <div className="bg-white p-6 rounded-3xl shadow-2xl mb-8 animate-bounce">
-                <img src={APP_LOGO_URL} alt="DashMeals Logo" className="h-16 w-auto object-contain" />
+            <div className="bg-brand-500 rounded-[40px] shadow-2xl mb-8 animate-bounce ring-4 ring-white/20 flex items-center justify-center overflow-hidden w-32 h-32">
+                <img src={APP_LOGO_URL} alt="DashMeals Logo" className="w-full h-full object-cover" />
             </div>
             <h1 className="text-5xl md:text-7xl font-black text-white tracking-tighter mb-2">
                 Dash<span className="text-brand-500">Meals</span>

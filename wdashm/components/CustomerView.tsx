@@ -3,21 +3,27 @@ import {
   MapPin, ShoppingBag, List, Map, ArrowLeft, ArrowRight, Plus, Bike, Footprints, 
   LogOut, Navigation, Search, X, Receipt, Phone, Info, Image as ImageIcon, 
   PlayCircle, Settings, Moon, Sun, Globe, CheckCircle, CheckCircle2, Star, Type, Clock, Bell, ChevronRight,
-  Shield, Lock, Fingerprint, Zap, HelpCircle, Book, Mail, ExternalLink, Car, Upload, FileText, Smartphone, MessageSquare,
-  Activity, ShieldCheck, LogIn, User as UserIcon, Camera, Pencil, MoreVertical, AlertTriangle, RefreshCw, Menu, Home, SlidersHorizontal
+  Shield, Lock, Fingerprint, Zap, Sparkles, HelpCircle, Book, Mail, ExternalLink, Car, Upload, FileText, Smartphone, MessageSquare,
+  Activity, ShieldCheck, LogIn, User as UserIcon, Camera, Pencil, MoreVertical, AlertTriangle, AlertCircle, Package, RefreshCw, Menu, Home, SlidersHorizontal, CreditCard, Ticket
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { supabase } from '../lib/supabase';
 import { KINSHASA_CENTER_LAT, KINSHASA_CENTER_LNG, CITY_COORDINATES, CITIES_RDC, APP_LOGO_URL } from '../constants';
 import { formatDualPrice } from '../utils/format';
-import { Restaurant, UserState, ViewMode, MenuItem, CartItem, User, Order, Promotion, Theme, Language, AppFont, PaymentMethod, MobileMoneyNetwork, SecuritySettings, AppSettings, MealReview } from '../types';
-import { calculateTime, getDistanceFromLatLonInKm, formatDistance, formatTime } from '../utils/geo';
+import { Restaurant, UserState, ViewMode, MenuItem, CartItem, User, Order, Promotion, Theme, Language, AppFont, PaymentMethod, MobileMoneyNetwork, SecuritySettings, AppSettings, MealReview, ClaimedOffer } from '../types';
+import { calculateTime, getDistanceFromLatLonInKm, getEstimatedRoadDistanceInKm, calculateRealisticTime, formatDistance, formatTime } from '../utils/geo';
 import { RestaurantCard } from './RestaurantCard';
+import { useRoute } from '../hooks/useRoute';
 import { MapView } from './MapView';
 import { CartDrawer } from './CartDrawer';
 import { ChatWindow } from './ChatWindow';
 import { StoryViewer } from './StoryViewer';
+import { ClientClaimedOffersModal } from './ClientClaimedOffersModal';
+import { ClaimedOfferModal } from './ClaimedOfferModal';
+import { claimOffer } from '../utils/claimedOffers';
 import { OrdersView } from './OrdersView';
+import { DeliveryTrackingMap } from './DeliveryTrackingMap';
+import { LocationPicker } from './LocationPicker';
 import { useTranslation } from '../lib/i18n';
 import { PinSetupDialog } from './PinSetupDialog';
 import { HelpCenter } from './HelpCenter';
@@ -76,8 +82,54 @@ interface Props {
   onRefreshData?: () => void;
 }
 
+const getNearestCity = (lat: number, lng: number): string => {
+  let nearestCity = 'Lubumbashi';
+  let minDistance = Infinity;
+  
+  for (const [cityName, coords] of Object.entries(CITY_COORDINATES)) {
+    const dist = getDistanceFromLatLonInKm(lat, lng, coords.latitude, coords.longitude);
+    if (dist < minDistance) {
+      minDistance = dist;
+      nearestCity = cityName;
+    }
+  }
+  return nearestCity;
+};
+
 export const CustomerView: React.FC<Props> = ({ user, allRestaurants, onLogout, theme, setTheme, language, setLanguage, font, setFont, onUpdateUser, onGoToAdmin, onRefreshData }) => {
   const t = useTranslation(language);
+
+  // Helper to retrieve active promo details for an item
+  const getPromoDetails = (item: MenuItem, restaurantId: string) => {
+    const promos = promotionsMap[restaurantId] || [];
+    for (const promo of promos) {
+      if (!promo.caption) continue;
+      const trimmed = promo.caption.trim();
+      if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+        try {
+          const js = JSON.parse(trimmed);
+          if (js && js.is_promo_product && js.menu_item_id === item.id) {
+            // Check expiration if present
+            if (js.expires_at) {
+              const now = new Date();
+              const exp = new Date(js.expires_at);
+              if (now > exp) {
+                continue; // Promotion has expired
+              }
+            }
+            return {
+              isPromo: true,
+              promoPrice: js.promo_price ? Number(js.promo_price) : null,
+              badgeText: js.badge_text || "PROMO",
+              expiresAt: js.expires_at
+            };
+          }
+        } catch (e) {}
+      }
+    }
+    return null;
+  };
+
   // State
   const [userState, setUserState] = useState<UserState>({
     location: null,
@@ -91,6 +143,23 @@ export const CustomerView: React.FC<Props> = ({ user, allRestaurants, onLogout, 
   const [appliedCampaign, setAppliedCampaign] = useState<any | null>(null);
   
   const [viewMode, setViewMode] = useState<ViewMode>('list');
+  const [isClientOffersOpen, setIsClientOffersOpen] = useState(false);
+  const [activeClaimedOffer, setActiveClaimedOffer] = useState<ClaimedOffer | null>(null);
+  
+  // States for Private Courier (Course Privée)
+  const [privateCourierTab, setPrivateCourierTab] = useState<'create' | 'history'>('create');
+  const [pickupAddress, setPickupAddress] = useState('');
+  const [deliveryAddress, setDeliveryAddress] = useState('');
+  const [packageDetails, setPackageDetails] = useState('');
+  const [recipientName, setRecipientName] = useState('');
+  const [recipientPhone, setRecipientPhone] = useState('');
+  const [courierVehicle, setCourierVehicle] = useState<'moto' | 'velo' | 'voiture' | 'pieton'>('moto');
+  const [courierPaymentMethod, setCourierPaymentMethod] = useState<'cash' | 'mobile_money'>('cash');
+  const [isSubmittingCourier, setIsSubmittingCourier] = useState(false);
+  const [pickupLocation, setPickupLocation] = useState<{ lat: number; lng: number; address?: string } | null>(null);
+  const [deliveryLocationPrivate, setDeliveryLocationPrivate] = useState<{ lat: number; lng: number; address?: string } | null>(null);
+  const [showPickupPicker, setShowPickupPicker] = useState(false);
+  const [showDeliveryPicker, setShowDeliveryPicker] = useState(false);
   const [profileName, setProfileName] = useState(user.name || '');
   const [profilePhone, setProfilePhone] = useState(user.phoneNumber || '');
   const [profileCity, setProfileCity] = useState(user.city || 'Kinshasa');
@@ -119,6 +188,30 @@ export const CustomerView: React.FC<Props> = ({ user, allRestaurants, onLogout, 
   }, []);
 
   const [selectedRestaurant, setSelectedRestaurant] = useState<Restaurant | null>(null);
+
+  // Calcul de la distance et du temps réels de trajet (routing) pour le restaurant sélectionné
+  const userCoords = useMemo(() => {
+    return userState.location ? { lat: userState.location.latitude, lng: userState.location.longitude } : null;
+  }, [userState.location]);
+
+  const restaurantCoords = useMemo(() => {
+    return selectedRestaurant?.latitude && selectedRestaurant?.longitude
+      ? { lat: selectedRestaurant.latitude, lng: selectedRestaurant.longitude }
+      : null;
+  }, [selectedRestaurant]);
+
+  const { route: selectedRestaurantRouteMoto } = useRoute(
+    userCoords,
+    restaurantCoords,
+    'moto'
+  );
+
+  const { route: selectedRestaurantRouteWalk } = useRoute(
+    userCoords,
+    restaurantCoords,
+    'pieton'
+  );
+
   const [showMenuDropdown, setShowMenuDropdown] = useState(false);
   const [isRefreshingData, setIsRefreshingData] = useState(false);
   const menuDropdownRef = useRef<HTMLDivElement>(null);
@@ -142,6 +235,20 @@ export const CustomerView: React.FC<Props> = ({ user, allRestaurants, onLogout, 
   const [urgentMode, setUrgentMode] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [showSuccess, setShowSuccess] = useState(false);
+  const [isKpayPolling, setIsKpayPolling] = useState(false);
+  const [kpayStatusMessage, setKpayStatusMessage] = useState('');
+  const [kpayCurrentPhone, setKpayCurrentPhone] = useState('');
+  const [kpayGatewayUrl, setKpayGatewayUrl] = useState('');
+  const kpayIntervalRef = useRef<any>(null);
+
+  useEffect(() => {
+    return () => {
+      if (kpayIntervalRef.current) {
+        clearInterval(kpayIntervalRef.current);
+      }
+    };
+  }, []);
+
   const [selectedCity, setSelectedCity] = useState<string>('Toutes');
   const [selectedCategory, setSelectedCategory] = useState<string>('Tous');
   const [selectedMenuCategory, setSelectedMenuCategory] = useState<string>('Tous');
@@ -225,10 +332,28 @@ export const CustomerView: React.FC<Props> = ({ user, allRestaurants, onLogout, 
   }, []);
 
   useEffect(() => {
+    const fetchAppSettings = async () => {
+      try {
+        const { data, error: fetchErr } = await supabase
+          .from('app_settings')
+          .select('value')
+          .eq('id', 'global')
+          .single();
+        
+        if (fetchErr) console.error("Supabase fetchErr:", fetchErr);
+        if (data?.value) {
+          const parsedVal = typeof data.value === 'string' ? JSON.parse(data.value) : data.value;
+          console.log("FETCHED APP SETTINGS:", parsedVal); setAppSettings(parsedVal);
+        }
+      } catch (error) {
+        console.error("Error fetching app settings:", error);
+      }
+    };
+
     fetchAppSettings();
 
     const appSettingsSubscription = supabase
-      .channel('public:app_settings')
+      .channel('public:app_settings_customer')
       .on('postgres_changes', {
         event: '*',
         schema: 'public',
@@ -236,7 +361,9 @@ export const CustomerView: React.FC<Props> = ({ user, allRestaurants, onLogout, 
         filter: 'id=eq.global'
       }, (payload) => {
         if (payload.new && (payload.new as any).value) {
-          setAppSettings((payload.new as any).value as AppSettings);
+          const rawVal = (payload.new as any).value;
+          const parsedVal = typeof rawVal === 'string' ? JSON.parse(rawVal) : rawVal;
+          console.log("FETCHED APP SETTINGS:", parsedVal); setAppSettings(parsedVal);
         }
       }).subscribe();
 
@@ -244,23 +371,6 @@ export const CustomerView: React.FC<Props> = ({ user, allRestaurants, onLogout, 
       supabase.removeChannel(appSettingsSubscription);
     };
   }, []);
-
-  const fetchAppSettings = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('app_settings')
-        .select('value')
-        .eq('id', 'global')
-        .single();
-      
-      if (error) throw error;
-      if (data?.value) {
-        setAppSettings(data.value as AppSettings);
-      }
-    } catch (error) {
-      console.error("Error fetching app settings:", error);
-    }
-  };
   
   // Notifications State
   const [notifications, setNotifications] = useState<any[]>([]);
@@ -595,7 +705,10 @@ export const CustomerView: React.FC<Props> = ({ user, allRestaurants, onLogout, 
   };
 
   const handleClaimReward = async (reward: any) => {
-    if (!user || user.role === 'guest') return;
+    if (!user || user.role === 'guest') {
+      toast.error("Veuillez vous connecter pour réclamer vos récompenses de fidélité.");
+      return;
+    }
     
     const currentPoints = loyaltyPoints[reward.restaurant_id] || 0;
     if (currentPoints < reward.points_required) {
@@ -620,7 +733,36 @@ export const CustomerView: React.FC<Props> = ({ user, allRestaurants, onLogout, 
             [reward.restaurant_id]: currentPoints - reward.points_required
         }));
 
-        toast.success(`Récompense réclamée : ${reward.name} ! Montrez ce message au restaurant.`);
+        // Find associated restaurant or fallback
+        const targetResto = (selectedRestaurant && selectedRestaurant.id === reward.restaurant_id)
+          ? selectedRestaurant
+          : (restaurants.find(r => r.id === reward.restaurant_id) || {
+              id: reward.restaurant_id,
+              name: reward.restaurant_name || 'Restaurant'
+            });
+
+        // Determine associated menu item id or name if any
+        const linkedMenuItemId = reward.menu_item_id || reward.menuItemId;
+        const linkedItem = (targetResto.menu && Array.isArray(targetResto.menu))
+          ? targetResto.menu.find((i: any) => i.id === linkedMenuItemId || (i.name && reward.name && i.name.toLowerCase() === reward.name.toLowerCase()))
+          : null;
+
+        const offerTitle = linkedItem ? linkedItem.name : reward.name;
+
+        // Claim and generate unique code / QR code
+        const claimed = await claimOffer({
+          user,
+          restaurant: targetResto as any,
+          promoId: linkedItem ? linkedItem.id : (reward.menu_item_id || reward.id),
+          title: `Cadeau Fidélité : ${offerTitle}`,
+          badgeText: `Gratuit (${reward.points_required} Pts)`,
+          caption: `Récompense de fidélité débloquée avec vos points chez ${targetResto.name}. Présentez ce code ou le QR code en caisse ou lors de votre commande.`,
+          promoPrice: 0
+        });
+
+        // Display modal immediately with code & QR Code
+        setActiveClaimedOffer(claimed);
+        toast.success(`🎉 Récompense réclamée ! Votre code d'activation est ${claimed.code}`);
     } catch (err) {
         console.error("Error claiming reward:", err);
         toast.error("Erreur lors de la réclamation");
@@ -1125,15 +1267,49 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
   // Update Restaurants when location or database changes
   useEffect(() => {
     if (userState.location) {
+      const lat = userState.location.latitude;
+      const lng = userState.location.longitude;
+
+      // Find nearest city based on GPS coordinates
+      const nearestCity = getNearestCity(lat, lng);
+
+      // If the user is logged in and their city doesn't match the nearest city detected by GPS
+      if (user && user.id !== 'guest' && user.city !== nearestCity) {
+        console.log(`📍 GPS detected nearest city: ${nearestCity} (current user city: ${user.city}). Updating user region.`);
+        updateUserProfile({
+          name: user.name || '',
+          phoneNumber: user.phoneNumber || '',
+          city: nearestCity,
+          avatarUrl: user.avatarUrl
+        }).then(() => {
+          toast.success(`📍 Région mise à jour automatiquement sur ${nearestCity} (détecté par GPS)`);
+        }).catch(err => {
+          console.error("Failed to automatically update user city from GPS", err);
+        });
+      }
+
       // Reverse Geocoding to get city
       if (!userState.locationError) {
-        fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${userState.location.latitude}&lon=${userState.location.longitude}&email=contact@dashmeals.app`)
+        fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&email=contact@dashmeals.app`)
           .then(res => res.json())
           .then(data => {
             if (data && data.address) {
               const city = data.address.city || data.address.town || data.address.village || data.address.state;
               if (city) {
                 setDetectedAddress(city);
+
+                // If Nominatim finds an exact match in our cities, we can also use that as primary confirmation
+                const matchedCity = Object.keys(CITY_COORDINATES).find(
+                  c => c.toLowerCase().trim() === city.toLowerCase().trim()
+                );
+                if (matchedCity && user && user.id !== 'guest' && user.city !== matchedCity) {
+                  updateUserProfile({
+                    name: user.name || '',
+                    phoneNumber: user.phoneNumber || '',
+                    city: matchedCity,
+                    avatarUrl: user.avatarUrl
+                  }).catch(err => console.error(err));
+                }
               }
             }
           })
@@ -1148,23 +1324,23 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
           const lat2 = r.latitude;
           const lon2 = r.longitude;
 
-          let dist = 9999;
+          let roadDist = 9999;
           if (
             lat1 !== undefined && lat1 !== null && !isNaN(lat1) &&
             lon1 !== undefined && lon1 !== null && !isNaN(lon1) &&
             lat2 !== undefined && lat2 !== null && !isNaN(lat2) &&
             lon2 !== undefined && lon2 !== null && !isNaN(lon2)
           ) {
-            dist = getDistanceFromLatLonInKm(lat1, lon1, lat2, lon2);
+            roadDist = getEstimatedRoadDistanceInKm(lat1, lon1, lat2, lon2);
           }
 
-          const distVal = isNaN(dist) ? 9999 : dist;
+          const distVal = isNaN(roadDist) ? 9999 : roadDist;
           
           return {
             ...r,
             distance: distVal,
-            timeWalking: calculateTime(distVal, SPEED_WALKING),
-            timeMoto: calculateTime(distVal, SPEED_MOTO),
+            timeWalking: calculateRealisticTime(distVal, 'pieton'),
+            timeMoto: calculateRealisticTime(distVal, 'moto'),
           };
         })
         .sort((a, b) => {
@@ -1181,7 +1357,7 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
       setRestaurants(activeRestaurants);
       fetchPromotions(activeRestaurants);
     }
-  }, [userState.location, allRestaurants]);
+  }, [userState.location, allRestaurants, user]);
 
   // Realtime Orders Subscription for Customer
   useEffect(() => {
@@ -1190,34 +1366,40 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
         .on(
             'postgres_changes',
             {
-                event: 'UPDATE', // On écoute quand le restaurant change le statut
+                event: '*', // On écoute tous les événements (INSERT, UPDATE, DELETE) pour synchronisation à chaud
                 schema: 'public',
                 table: 'orders',
                 filter: `user_id=eq.${user.id}`
             },
             (payload) => {
                 console.log("Mise à jour commande client:", payload);
-                // On met à jour l'état local pour voir le changement instantanément
-                setOrders(prev => prev.map(o => 
-                    o.id === payload.new.id ? { ...o, status: payload.new.status } : o
-                ));
-                
-                // Send push notification
-                const statusMap: Record<string, string> = {
-                    'preparing': t('order_preparing_msg'),
-                    'ready': t('order_ready_msg'),
-                    'delivering': t('order_delivering_msg'),
-                    'completed': t('order_completed_msg'),
-                    'cancelled': t('order_cancelled_msg')
-                };
-                
-                const message = statusMap[payload.new.status] || `${t('order_status_changed')} : ${payload.new.status}`;
-                
-                sendPushNotification(t('order_update'), {
-                    body: message,
-                    tag: `order-${payload.new.id}`,
-                    requireInteraction: true
-                });
+                if (payload.eventType === 'INSERT') {
+                    fetchOrders();
+                } else if (payload.eventType === 'DELETE') {
+                    setOrders(prev => prev.filter(o => o.id !== payload.old.id));
+                } else if (payload.eventType === 'UPDATE') {
+                    // On met à jour l'état local pour voir le changement instantanément
+                    setOrders(prev => prev.map(o => 
+                        o.id === payload.new.id ? { ...o, status: payload.new.status } : o
+                    ));
+                    
+                    // Send push notification
+                    const statusMap: Record<string, string> = {
+                        'preparing': t('order_preparing_msg'),
+                        'ready': t('order_ready_msg'),
+                        'delivering': t('order_delivering_msg'),
+                        'completed': t('order_completed_msg'),
+                        'cancelled': t('order_cancelled_msg')
+                    };
+                    
+                    const message = statusMap[payload.new.status] || `${t('order_status_changed')} : ${payload.new.status}`;
+                    
+                    sendPushNotification(t('order_update'), {
+                        body: message,
+                        tag: `order-${payload.new.id}`,
+                        requireInteraction: true
+                    });
+                }
             }
         )
         .subscribe();
@@ -1405,8 +1587,21 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
             )
             .subscribe();
 
+        const handleStorageChange = (e: StorageEvent) => {
+            if (e.key === 'dashmeals_mock_orders') {
+                fetchOrders();
+            }
+        };
+        window.addEventListener('storage', handleStorageChange);
+
+        const pollInterval = setInterval(() => {
+            fetchOrders();
+        }, 15000);
+
         return () => {
             supabase.removeChannel(ordersSubscription);
+            window.removeEventListener('storage', handleStorageChange);
+            clearInterval(pollInterval);
         };
     }
   }, [viewMode, user.id]);
@@ -1476,7 +1671,11 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                 const localOrders = JSON.parse(localOrdersStr);
                 // Only add local orders that belong to this user
                 const userLocalOrders = localOrders.filter((o: any) => o.user_id === user.id);
-                allOrders = [...userLocalOrders, ...allOrders];
+                
+                // Add userLocalOrders that are not already present in allOrders to prevent duplicates
+                const dbOrderIds = new Set(allOrders.map((o: any) => o.id));
+                const uniqueLocalOrders = userLocalOrders.filter((o: any) => !dbOrderIds.has(o.id));
+                allOrders = [...uniqueLocalOrders, ...allOrders];
             } catch (e) {
                 console.error("Error parsing local orders", e);
             }
@@ -1492,7 +1691,7 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
             if (validRestaurantIds.length > 0) {
                 const { data: restaurantsData, error: restaurantsError } = await supabase
                     .from('restaurants')
-                    .select('id, name, phone_number, owner_id, currency, display_currency_mode, exchange_rate')
+                    .select('id, name, phone_number, owner_id, currency, display_currency_mode, exchange_rate, latitude, longitude')
                     .in('id', validRestaurantIds);
                 
                 if (restaurantsError) {
@@ -1508,7 +1707,9 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                             ownerId: r.owner_id,
                             currency: r.currency,
                             displayCurrencyMode: r.display_currency_mode,
-                            exchangeRate: r.exchange_rate
+                            exchangeRate: r.exchange_rate,
+                            latitude: r.latitude,
+                            longitude: r.longitude
                         };
                     });
                 }
@@ -1880,17 +2081,27 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
         setCartConflict({ item, restaurant });
         return;
     }
+
+    const promo = getPromoDetails(item, restaurant.id);
+    const itemToAdd = promo && promo.promoPrice !== null
+      ? { ...item, price: promo.promoPrice }
+      : item;
+
     setCart(prev => {
-        const existing = prev.find(i => i.id === item.id);
-        if (existing) return prev.map(i => i.id === item.id ? { ...i, quantity: i.quantity + 1 } : i);
-        return [...prev, { ...item, quantity: 1, restaurantId: restaurant.id, restaurantName: restaurant.name }];
+        const existing = prev.find(i => i.id === itemToAdd.id);
+        if (existing) return prev.map(i => i.id === itemToAdd.id ? { ...i, quantity: i.quantity + 1 } : i);
+        return [...prev, { ...itemToAdd, quantity: 1, restaurantId: restaurant.id, restaurantName: restaurant.name }];
     });
   };
 
   const clearAndAddToCart = () => {
     if (!cartConflict) return;
     const { item, restaurant } = cartConflict;
-    setCart([{ ...item, quantity: 1, restaurantId: restaurant.id, restaurantName: restaurant.name }]);
+    const promo = getPromoDetails(item, restaurant.id);
+    const itemToAdd = promo && promo.promoPrice !== null
+      ? { ...item, price: promo.promoPrice }
+      : item;
+    setCart([{ ...itemToAdd, quantity: 1, restaurantId: restaurant.id, restaurantName: restaurant.name }]);
     setCartConflict(null);
     toast.info(`Panier mis à jour avec ${item.name}`);
   };
@@ -1988,9 +2199,168 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
 
         // Success Path
         closeCart();
-        setShowSuccess(true);
         setCart([]);
         setAppliedCampaign(null);
+        
+        if (paymentMethod === 'kpay') {
+            toast.info("Initialisation du paiement KPay...");
+            try {
+                const response = await fetch('/api/kpay/create-payment', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        orderId: data?.id || 'mock-' + Date.now(),
+                        amount: cartTotal + (deliveryFee || 0),
+                        currency: 'USD',
+                        phoneNumber: customPhone,
+                        provider: network,
+                        baseUrl: "https://dashmeals-rdc.onrender.com"
+                    })
+                });
+
+                if (!response.ok) {
+                    const errData = await response.json();
+                    throw new Error(errData.error || "Erreur de création KPay");
+                }
+
+                const responseData = await response.json();
+                
+                if (responseData.mode === "USSD" || responseData.paymentId) {
+                    const paymentId = responseData.paymentId;
+                    setKpayCurrentPhone(customPhone || '');
+                    setKpayStatusMessage(responseData.message || "Paiement USSD initié.");
+                    setIsKpayPolling(true);
+                    
+                    // Poll function
+                    const startKpayPolling = (pId: string) => {
+                        let attempts = 0;
+                        const maxAttempts = 40; // 2 minutes (40 * 3s)
+                        
+                        kpayIntervalRef.current = setInterval(async () => {
+                            attempts++;
+                            if (attempts > maxAttempts) {
+                                if (kpayIntervalRef.current) clearInterval(kpayIntervalRef.current);
+                                setIsKpayPolling(false);
+                                setIsCheckingOut(false);
+                                toast.error("Le délai d'attente pour la validation KPay a expiré. Votre commande reste en attente.");
+                                return;
+                            }
+                            
+                            try {
+                                const statusRes = await fetch(`/api/kpay/payment-status/${pId}`);
+                                if (!statusRes.ok) return;
+                                
+                                const statusData = await statusRes.json();
+                                console.log("[CustomerView] Polled KPay status:", statusData.status);
+                                
+                                setKpayStatusMessage(statusData.status);
+                                
+                                if (statusData.status === 'COMPLETED' || statusData.status === 'SUCCESSFUL') {
+                                    if (kpayIntervalRef.current) clearInterval(kpayIntervalRef.current);
+                                    setIsKpayPolling(false);
+                                    setIsCheckingOut(false);
+                                    toast.success("Paiement validé avec succès !");
+                                    setShowSuccess(true);
+                                    
+                                    // Send confirmation email
+                                    if (user.email) {
+                                      sendOrderConfirmationEmail({
+                                        id: data?.id || 'mock-' + Date.now(),
+                                        totalAmount: cartTotal,
+                                        items: itemsWithUrgent
+                                      }, user.email);
+                                    }
+                                    
+                                    // Notify restaurant
+                                    const restaurant = restaurants.find(r => r.id === cart[0].restaurantId);
+                                    if (restaurant && restaurant.ownerId) {
+                                      // 1. Database notification
+                                      if (data?.id) {
+                                        const formatRate = restaurant.exchangeRate || appSettings?.payment_exchange_rate || 2850;
+                                        const formatCurrency = (restaurant.currency as 'USD' | 'CDF') || 'USD';
+                                        const formatMode = restaurant.displayCurrencyMode || 'dual';
+                                        const formattedAmount = formatDualPrice(cartTotal, 'USD', formatRate, formatMode as any);
+                                        
+                                        await supabase.from('notifications').insert({
+                                          user_id: restaurant.ownerId,
+                                          restaurant_id: restaurant.id,
+                                          title: `Nouvelle commande #${data.id.slice(0, 4)}`,
+                                          message: `Vous avez reçu une nouvelle commande de ${formattedAmount}.`,
+                                          type: 'new_order',
+                                          data: { order_id: data.id }
+                                        });
+                                      }
+
+                                      // 2. Email notification
+                                      const { data: ownerProfile } = await supabase
+                                        .from('profiles')
+                                        .select('email')
+                                        .eq('id', restaurant.ownerId)
+                                        .single();
+                                      
+                                      if (ownerProfile?.email) {
+                                        sendNewOrderNotificationToRestaurant({
+                                          id: data?.id || 'mock-' + Date.now(),
+                                          totalAmount: cartTotal,
+                                          items: itemsWithUrgent
+                                        }, ownerProfile.email, restaurant.name);
+                                      }
+                                    }
+
+                                    // Redirection rapide vers l'historique pour voir le suivi
+                                    setTimeout(() => {
+                                         setShowSuccess(false);
+                                         setViewMode('orders');
+                                    }, 2000);
+                                } else if (statusData.status === 'FAILED') {
+                                    if (kpayIntervalRef.current) clearInterval(kpayIntervalRef.current);
+                                    setIsKpayPolling(false);
+                                    setIsCheckingOut(false);
+                                    toast.error(statusData.failureReason || "La transaction KPay a échoué. Veuillez réessayer.");
+                                } else if (statusData.status === 'CANCELLED') {
+                                    if (kpayIntervalRef.current) clearInterval(kpayIntervalRef.current);
+                                    setIsKpayPolling(false);
+                                    setIsCheckingOut(false);
+                                    toast.error("La transaction KPay a été annulée.");
+                                }
+                            } catch (pollErr) {
+                                console.error("[CustomerView] Error polling KPay status:", pollErr);
+                            }
+                        }, 3000);
+                    };
+                    
+                    startKpayPolling(paymentId);
+                    return; // Stop execution here, wait for polling to finish
+                } else if (responseData.url) {
+                    setKpayGatewayUrl(responseData.url);
+                    setIsCheckingOut(false);
+                    
+                    // Attempt to open in a new tab if inside an iframe (AI Studio Preview)
+                    try {
+                        if (window.self !== window.top) {
+                            const newTab = window.open(responseData.url, '_blank');
+                            if (newTab) {
+                                toast.success("Le portail de paiement KPay s'est ouvert dans un nouvel onglet.");
+                            } else {
+                                toast.warning("L'ouverture automatique a été bloquée. Veuillez cliquer sur 'Procéder au paiement' ci-dessous.");
+                            }
+                        } else {
+                            window.location.href = responseData.url;
+                        }
+                    } catch (e) {
+                        window.open(responseData.url, '_blank');
+                    }
+                    return; // Stop execution, the user is redirected or shown the modal/overlay link
+                }
+            } catch (err: any) {
+                console.error("KPay initialization error:", err);
+                toast.error(err.message || "Impossible d'initialiser le paiement KPay. Commande en attente.");
+                setIsCheckingOut(false);
+                return;
+            }
+        }
+
+        setShowSuccess(true);
         
         // Send confirmation email
         if (user.email) {
@@ -2008,7 +2378,7 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
           console.log('Notifying restaurant...');
           
           // Formater proprement le montant de la commande selon la devise du restaurant pour éviter l'affichage erroné "10 FC" au lieu de "28500 FC" (ou inversement)
-          const formatRate = restaurant.exchangeRate || 2850;
+          const formatRate = restaurant.exchangeRate || appSettings?.payment_exchange_rate || 2850;
           const formatCurrency = (restaurant.currency as 'USD' | 'CDF') || 'USD';
           const formatMode = restaurant.displayCurrencyMode || 'dual';
           const formattedAmount = formatDualPrice(cartTotal, 'USD', formatRate, formatMode as any);
@@ -2166,6 +2536,537 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
     } finally {
         setIsSubmittingOnboarding(false);
     }
+  };
+
+  const handleSubmitPrivateCourier = async () => {
+    if (!pickupAddress || !deliveryAddress || !packageDetails) {
+      toast.error("Veuillez remplir les adresses de retrait, de livraison et les détails du colis.");
+      return;
+    }
+    
+    setIsSubmittingCourier(true);
+    
+    const courierFee = 5.0; // Flat fee $5.00 for private courier
+    const orderId = 'private-' + Math.random().toString(36).substr(2, 9);
+    
+    const startLat = pickupLocation?.lat || (profileCity === 'Lubumbashi' ? -11.6580 : -4.312);
+    const startLng = pickupLocation?.lng || (profileCity === 'Lubumbashi' ? 27.4720 : 15.310);
+    const endLat = deliveryLocationPrivate?.lat || (profileCity === 'Lubumbashi' ? -11.6644 : -4.325);
+    const endLng = deliveryLocationPrivate?.lng || (profileCity === 'Lubumbashi' ? 27.4795 : 15.322);
+
+    const newCourierOrder = {
+      id: orderId,
+      user_id: user.id,
+      restaurant_id: restaurants[0]?.id || 'resto-101', // Fallback constraint
+      status: 'pending',
+      paymentMethod: courierPaymentMethod,
+      paymentStatus: 'pending',
+      total_amount: courierFee,
+      delivery_fee: courierFee,
+      created_at: new Date().toISOString(),
+      items: [
+        {
+          id: 'private-courier-item',
+          name: 'Course Privée 📦',
+          description: packageDetails,
+          price: courierFee,
+          quantity: 1,
+          category: 'plat',
+          isAvailable: true,
+          isPrivateCourier: true,
+          pickupAddress: pickupAddress,
+          deliveryAddress: deliveryAddress,
+          recipientName: recipientName || 'Destinataire',
+          recipientPhone: recipientPhone || '',
+          courierVehicle: courierVehicle,
+          customerName: user.name || 'Client',
+          customerPhone: user.phoneNumber || ''
+        }
+      ],
+      delivery_location: {
+        address: deliveryAddress,
+        lat: endLat,
+        lng: endLng,
+        pickupAddress: pickupAddress,
+        pickupLat: startLat,
+        pickupLng: startLng
+      }
+    };
+
+    try {
+      console.log('Inserting private courier order into Supabase...');
+      const { data, error } = await supabase.from('orders').insert({
+        user_id: user.id,
+        restaurant_id: restaurants[0]?.id || 'resto-101',
+        status: 'pending',
+        total_amount: courierFee,
+        delivery_fee: courierFee,
+        exchange_rate: 2800,
+        delivery_location: newCourierOrder.delivery_location,
+        items: newCourierOrder.items
+      }).select().single();
+
+      if (!error && data) {
+        newCourierOrder.id = data.id;
+        toast.success("Demande de course privée envoyée ! Les livreurs ont été informés.");
+      } else {
+        console.warn("DB insert failed, fallback to local storage:", error);
+        toast.success("Course privée créée localement !");
+      }
+    } catch (e) {
+      console.warn("Supabase insert crashed, fallback to local storage:", e);
+      toast.success("Demande de course privée créée ! (Mode Démo)");
+    }
+
+    // Always sync locally in localStorage for real-time local experience
+    const localOrdersStr = localStorage.getItem('dashmeals_mock_orders');
+    const localOrders = localOrdersStr ? JSON.parse(localOrdersStr) : [];
+    localOrders.unshift(newCourierOrder);
+    localStorage.setItem('dashmeals_mock_orders', JSON.stringify(localOrders));
+
+    // Reset Form
+    setPickupAddress('');
+    setDeliveryAddress('');
+    setPackageDetails('');
+    setRecipientName('');
+    setRecipientPhone('');
+    setPickupLocation(null);
+    setDeliveryLocationPrivate(null);
+    setShowPickupPicker(false);
+    setShowDeliveryPicker(false);
+    
+    // Refresh history & go to orders tab
+    fetchOrders();
+    setViewMode('orders');
+    setIsSubmittingCourier(false);
+  };
+
+  const handleCancelPrivateCourier = async (orderId: string) => {
+    try {
+      const { error } = await supabase
+        .from('orders')
+        .update({ status: 'cancelled' })
+        .eq('id', orderId);
+
+      // Also update in mock orders
+      const localOrdersStr = localStorage.getItem('dashmeals_mock_orders');
+      if (localOrdersStr) {
+        const localOrders = JSON.parse(localOrdersStr);
+        const updated = localOrders.map((o: any) => {
+          if (o.id === orderId) {
+            return { ...o, status: 'cancelled' };
+          }
+          return o;
+        });
+        localStorage.setItem('dashmeals_mock_orders', JSON.stringify(updated));
+      }
+
+      setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: 'cancelled' } : o));
+      toast.success("Course privée annulée avec succès.");
+      fetchOrders();
+    } catch (e) {
+      console.error("Error cancelling private courier:", e);
+      toast.error("Erreur lors de l'annulation de la course.");
+    }
+  };
+
+  const renderPrivateCourierView = () => {
+    const clientPrivateOrders = orders.filter(
+      (o) => o.items && o.items[0]?.isPrivateCourier === true
+    );
+
+    const stats = {
+      total: clientPrivateOrders.length,
+      pending: clientPrivateOrders.filter(o => o.status === 'pending').length,
+      active: clientPrivateOrders.filter(o => ['accepted', 'preparing', 'ready', 'delivering'].includes(o.status)).length,
+      completed: clientPrivateOrders.filter(o => o.status === 'delivered' || o.status === 'completed').length,
+    };
+
+    return (
+        <div className="animate-in fade-in slide-in-from-right duration-500 pb-20 max-w-2xl mx-auto px-4 sm:px-0">
+            <button onClick={() => setViewMode('list')} className="mb-8 flex items-center text-gray-500 dark:text-gray-400 font-bold hover:text-brand-600 transition-colors group">
+                <div className="w-8 h-8 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center mr-2 group-hover:bg-brand-50 dark:group-hover:bg-brand-900/20 transition-colors">
+                    <ArrowLeft size={16} /> 
+                </div>
+                Retour aux Enseignes
+            </button>
+            
+            <div className="bg-white dark:bg-gray-800 rounded-[40px] shadow-2xl border border-gray-100 dark:border-gray-700 overflow-hidden">
+                <div className="bg-gradient-to-r from-orange-500 to-amber-500 p-10 text-white text-center relative overflow-hidden">
+                    <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full -mr-32 -mt-32 blur-3xl animate-pulse"></div>
+                    <div className="relative z-10 flex flex-col items-center">
+                        <div className="w-20 h-20 bg-white/20 rounded-[28px] flex items-center justify-center mb-6 backdrop-blur-md shadow-inner">
+                            <Package size={40} />
+                        </div>
+                        <h2 className="text-3xl font-display font-black uppercase tracking-tight mb-2">Course Privée 📦</h2>
+                        <p className="text-orange-100 text-xs font-bold max-w-md">Commandez un livreur pour récupérer un colis, effectuer des achats spécifiques ou livrer vos documents partout à Kinshasa.</p>
+                    </div>
+                </div>
+
+                {/* Tab Switcher */}
+                <div className="flex p-1.5 bg-gray-100 dark:bg-gray-900/50 rounded-2xl my-6 mx-8">
+                    <button
+                        type="button"
+                        onClick={() => setPrivateCourierTab('create')}
+                        className={`flex-1 py-3 text-xs font-black rounded-xl transition-all uppercase flex items-center justify-center space-x-2 ${privateCourierTab === 'create' ? 'bg-white dark:bg-gray-800 text-gray-950 dark:text-white shadow-sm' : 'text-gray-500 dark:text-gray-400 hover:text-gray-950'}`}
+                    >
+                        <Plus size={14} />
+                        <span>Nouvelle Demande</span>
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setPrivateCourierTab('history')}
+                        className={`flex-1 py-3 text-xs font-black rounded-xl transition-all uppercase flex items-center justify-center space-x-2 ${privateCourierTab === 'history' ? 'bg-white dark:bg-gray-800 text-gray-950 dark:text-white shadow-sm' : 'text-gray-500 dark:text-gray-400 hover:text-gray-950'}`}
+                    >
+                        <Clock size={14} />
+                        <span>Mes Courses ({stats.total})</span>
+                    </button>
+                </div>
+
+                {privateCourierTab === 'create' ? (
+                  <div className="p-8 space-y-6">
+                      <div className="p-4 bg-orange-50 dark:bg-brand-500/10 rounded-2xl flex items-start space-x-3 text-orange-800 dark:text-brand-300">
+                          <AlertCircle className="shrink-0 mt-0.5" size={18} />
+                          <div>
+                              <h4 className="text-xs font-bold">Tarification Forfaitaire Simple</h4>
+                              <p className="text-[10px] opacity-90 mt-0.5">Le tarif pour une course privée standard est fixé à un forfait de <strong className="font-extrabold">$5.00 (14 000 FC)</strong>. Le paiement s'effectue en espèces au retrait/livraison ou par Mobile Money.</p>
+                          </div>
+                      </div>
+
+                      <div className="space-y-4">
+                          <h3 className="text-sm font-black text-gray-900 dark:text-white uppercase tracking-wider">Itinéraire & Colis</h3>
+                          
+                          <div className="space-y-3">
+                              <div>
+                                  <div className="flex justify-between items-center mb-1.5">
+                                      <label className="block text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase tracking-widest">Adresse de Retrait (Où récupérer ?) *</label>
+                                      <button 
+                                          type="button"
+                                          onClick={() => {
+                                              setShowPickupPicker(!showPickupPicker);
+                                              setShowDeliveryPicker(false);
+                                          }}
+                                          className="text-[10px] font-bold text-orange-600 dark:text-brand-400 hover:underline flex items-center space-x-1"
+                                      >
+                                          <Map size={12} />
+                                          <span>{showPickupPicker ? "Masquer la carte" : "Sélectionner sur la carte"}</span>
+                                      </button>
+                                  </div>
+                                  <div className="relative mb-2">
+                                      <MapPin className="absolute left-4 top-1/2 -translate-y-1/2 text-orange-500" size={18} />
+                                      <input 
+                                          type="text" 
+                                          placeholder="Ex: Immeuble du 30 Juin, Bureau 4B, Gombe"
+                                          className="w-full pl-12 pr-4 py-3.5 rounded-2xl border border-gray-200 dark:border-white/10 outline-none text-sm bg-gray-50 dark:bg-white/5 text-gray-900 dark:text-white focus:ring-4 focus:ring-brand-500/10 focus:bg-white transition-all font-semibold"
+                                          value={pickupAddress}
+                                          onChange={(e) => setPickupAddress(e.target.value)}
+                                      />
+                                  </div>
+                                  {showPickupPicker && (
+                                      <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 animate-in fade-in duration-250 mb-3 text-left">
+                                          <p className="text-[10px] text-gray-500 dark:text-gray-400 font-bold mb-2">Cliquez sur la carte pour définir le point de retrait exact :</p>
+                                          <LocationPicker 
+                                              initialLocation={pickupLocation ? { lat: pickupLocation.lat, lng: pickupLocation.lng } : undefined}
+                                              onLocationSelect={(loc) => {
+                                                  setPickupLocation(loc);
+                                                  setPickupAddress(loc.address || `${loc.lat.toFixed(6)}, ${loc.lng.toFixed(6)}`);
+                                              }} 
+                                          />
+                                      </div>
+                                  )}
+                              </div>
+
+                              <div>
+                                  <div className="flex justify-between items-center mb-1.5">
+                                      <label className="block text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase tracking-widest">Adresse de Livraison (Où déposer ?) *</label>
+                                      <button 
+                                          type="button"
+                                          onClick={() => {
+                                              setShowDeliveryPicker(!showDeliveryPicker);
+                                              setShowPickupPicker(false);
+                                          }}
+                                          className="text-[10px] font-bold text-brand-600 dark:text-brand-400 hover:underline flex items-center space-x-1"
+                                      >
+                                          <Map size={12} />
+                                          <span>{showDeliveryPicker ? "Masquer la carte" : "Sélectionner sur la carte"}</span>
+                                      </button>
+                                  </div>
+                                  <div className="relative mb-2">
+                                      <MapPin className="absolute left-4 top-1/2 -translate-y-1/2 text-brand-600" size={18} />
+                                      <input 
+                                          type="text" 
+                                          placeholder="Ex: 14ème Rue, Quartier Industriel, Limete"
+                                          className="w-full pl-12 pr-4 py-3.5 rounded-2xl border border-gray-200 dark:border-white/10 outline-none text-sm bg-gray-50 dark:bg-white/5 text-gray-900 dark:text-white focus:ring-4 focus:ring-brand-500/10 focus:bg-white transition-all font-semibold"
+                                          value={deliveryAddress}
+                                          onChange={(e) => setDeliveryAddress(e.target.value)}
+                                      />
+                                  </div>
+                                  {showDeliveryPicker && (
+                                      <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 animate-in fade-in duration-250 mb-3 text-left">
+                                          <p className="text-[10px] text-gray-500 dark:text-gray-400 font-bold mb-2">Cliquez sur la carte pour définir le point de livraison exact :</p>
+                                          <LocationPicker 
+                                              initialLocation={deliveryLocationPrivate ? { lat: deliveryLocationPrivate.lat, lng: deliveryLocationPrivate.lng } : undefined}
+                                              onLocationSelect={(loc) => {
+                                                  setDeliveryLocationPrivate(loc);
+                                                  setDeliveryAddress(loc.address || `${loc.lat.toFixed(6)}, ${loc.lng.toFixed(6)}`);
+                                              }} 
+                                          />
+                                      </div>
+                                  )}
+                              </div>
+
+                              <div>
+                                  <label className="block text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-1.5">Description de la course (Quoi récupérer/livrer ?) *</label>
+                                  <textarea 
+                                      placeholder="Ex: Un pli de documents urgents pour M. Kambale, ou Récupérer un colis de vêtements chez le couturier..."
+                                      rows={3}
+                                      className="w-full px-4 py-3.5 rounded-2xl border border-gray-200 dark:border-white/10 outline-none text-sm bg-gray-50 dark:bg-white/5 text-gray-900 dark:text-white focus:ring-4 focus:ring-brand-500/10 focus:bg-white transition-all font-semibold"
+                                      value={packageDetails}
+                                      onChange={(e) => setPackageDetails(e.target.value)}
+                                  />
+                              </div>
+                          </div>
+                      </div>
+
+                      <div className="space-y-4 pt-2">
+                          <h3 className="text-sm font-black text-gray-900 dark:text-white uppercase tracking-wider">Destinataire (Facultatif)</h3>
+                          
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                              <div>
+                                  <label className="block text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-1.5">Nom du Destinataire</label>
+                                  <input 
+                                      type="text" 
+                                      placeholder="Ex: Merveille Kabamba"
+                                      className="w-full px-4 py-3.5 rounded-2xl border border-gray-200 dark:border-white/10 outline-none text-sm bg-gray-50 dark:bg-white/5 text-gray-900 dark:text-white focus:ring-4 focus:ring-brand-500/10 focus:bg-white transition-all font-semibold"
+                                      value={recipientName}
+                                      onChange={(e) => setRecipientName(e.target.value)}
+                                  />
+                              </div>
+                              <div>
+                                  <label className="block text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-1.5">Téléphone du Destinataire</label>
+                                  <input 
+                                      type="tel" 
+                                      placeholder="Ex: +243 82 000 0000"
+                                      className="w-full px-4 py-3.5 rounded-2xl border border-gray-200 dark:border-white/10 outline-none text-sm bg-gray-50 dark:bg-white/5 text-gray-900 dark:text-white focus:ring-4 focus:ring-brand-500/10 focus:bg-white transition-all font-semibold"
+                                      value={recipientPhone}
+                                      onChange={(e) => setRecipientPhone(e.target.value)}
+                                  />
+                              </div>
+                          </div>
+                      </div>
+
+                      <div className="space-y-4 pt-2">
+                          <h3 className="text-sm font-black text-gray-900 dark:text-white uppercase tracking-wider">Type de Véhicule Souhaité</h3>
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                              {[
+                                  { key: 'moto', label: 'Moto 🛵', desc: 'Rapide' },
+                                  { key: 'velo', label: 'Vélo 🚲', desc: 'Écologique' },
+                                  { key: 'voiture', label: 'Voiture 🚗', desc: 'Colis Large' },
+                                  { key: 'pieton', label: 'Piéton 🚶', desc: 'Proximité' }
+                              ].map(item => (
+                                  <button
+                                      key={item.key}
+                                      type="button"
+                                      onClick={() => setCourierVehicle(item.key as any)}
+                                      className={`p-3.5 rounded-2xl border flex flex-col items-center text-center justify-center transition-all ${courierVehicle === item.key ? 'bg-orange-50 border-orange-500 text-orange-600 dark:bg-brand-500/10 dark:text-brand-400' : 'border-gray-200 dark:border-white/10 hover:bg-gray-50 dark:hover:bg-white/5'}`}
+                                  >
+                                      <span className="text-xs font-black">{item.label}</span>
+                                      <span className="text-[8px] opacity-65 mt-0.5">{item.desc}</span>
+                                  </button>
+                              ))}
+                          </div>
+                      </div>
+
+                      <div className="space-y-4 pt-2">
+                          <h3 className="text-sm font-black text-gray-900 dark:text-white uppercase tracking-wider">Mode de Paiement</h3>
+                          <div className="grid grid-cols-2 gap-3">
+                              {[
+                                  { key: 'cash', label: 'Espèces (Cash) 💵' },
+                                  { key: 'mobile_money', label: 'Mobile Money 📱' }
+                              ].map(method => (
+                                  <button
+                                      key={method.key}
+                                      type="button"
+                                      onClick={() => setCourierPaymentMethod(method.key as any)}
+                                      className={`p-3.5 rounded-2xl border text-center transition-all ${courierPaymentMethod === method.key ? 'bg-orange-50 border-orange-500 text-orange-600 dark:bg-brand-500/10 dark:text-brand-400' : 'border-gray-200 dark:border-white/10 hover:bg-gray-50 dark:hover:bg-white/5'}`}
+                                  >
+                                      <span className="text-xs font-black">{method.label}</span>
+                                  </button>
+                              ))}
+                          </div>
+                      </div>
+
+                      <div className="pt-6 border-t border-gray-100 dark:border-white/5">
+                          <button
+                              onClick={handleSubmitPrivateCourier}
+                              disabled={isSubmittingCourier}
+                              className="w-full py-4 rounded-[22px] bg-gradient-to-r from-orange-500 to-amber-500 text-white font-black text-sm uppercase tracking-widest hover:opacity-95 shadow-xl shadow-brand-500/20 active:scale-[0.98] transition-all disabled:opacity-50"
+                          >
+                              {isSubmittingCourier ? "Traitement de la demande..." : "Confirmer & Lancer la Course ($5.00)"}
+                          </button>
+                      </div>
+                  </div>
+                ) : (
+                  <div className="p-8 space-y-6">
+                      {/* Stats Section */}
+                      <div className="grid grid-cols-4 gap-2 text-center">
+                          <div className="p-3 bg-gray-50 dark:bg-white/5 rounded-2xl">
+                              <span className="block text-[8px] font-bold text-gray-400 uppercase">Total</span>
+                              <span className="text-lg font-black text-gray-800 dark:text-gray-100">{stats.total}</span>
+                          </div>
+                          <div className="p-3 bg-yellow-50 dark:bg-yellow-500/10 rounded-2xl">
+                              <span className="block text-[8px] font-bold text-yellow-600 dark:text-yellow-400 uppercase">Attente</span>
+                              <span className="text-lg font-black text-yellow-750 dark:text-yellow-400">{stats.pending}</span>
+                          </div>
+                          <div className="p-3 bg-blue-50 dark:bg-blue-500/10 rounded-2xl">
+                              <span className="block text-[8px] font-bold text-blue-600 dark:text-blue-400 uppercase">En cours</span>
+                              <span className="text-lg font-black text-blue-750 dark:text-blue-400">{stats.active}</span>
+                          </div>
+                          <div className="p-3 bg-green-50 dark:bg-green-500/10 rounded-2xl">
+                              <span className="block text-[8px] font-bold text-green-600 dark:text-green-400 uppercase">Livrées</span>
+                              <span className="text-lg font-black text-green-750 dark:text-green-400">{stats.completed}</span>
+                          </div>
+                      </div>
+
+                      {/* Course list */}
+                      <div className="space-y-4">
+                          <h3 className="text-xs font-black text-gray-400 dark:text-gray-500 uppercase tracking-widest">Liste de vos courses privées</h3>
+                          
+                          {clientPrivateOrders.length === 0 ? (
+                              <div className="py-12 text-center border-2 border-dashed border-gray-100 dark:border-gray-800 rounded-3xl">
+                                  <Package size={36} className="mx-auto text-gray-300 mb-3" />
+                                  <p className="text-xs text-gray-500 dark:text-gray-400 font-bold">Aucune course privée enregistrée pour le moment.</p>
+                                  <p className="text-[10px] text-gray-400 mt-1">Créez votre première demande dans l'onglet à gauche !</p>
+                              </div>
+                          ) : (
+                              <div className="space-y-4 max-h-[500px] overflow-y-auto pr-1">
+                                  {clientPrivateOrders.map(order => {
+                                      const item = order.items?.[0] || {};
+                                      return (
+                                          <div key={order.id} className="p-4 bg-white dark:bg-gray-750 border border-gray-100 dark:border-gray-700 rounded-2xl space-y-3.5 shadow-xxs text-left relative overflow-hidden">
+                                              <div className="flex justify-between items-start">
+                                                  <div>
+                                                      <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded ${
+                                                          order.status === 'pending' ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-500/20 dark:text-yellow-400' :
+                                                          order.status === 'cancelled' ? 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400' :
+                                                          order.status === 'delivered' || order.status === 'completed' ? 'bg-green-100 text-green-800 dark:bg-green-500/20 dark:text-green-400' :
+                                                          'bg-blue-100 text-blue-800 dark:bg-blue-500/20 dark:text-blue-400'
+                                                      }`}>
+                                                          {order.status === 'pending' ? 'Recherche livreur ⌛' :
+                                                           order.status === 'cancelled' ? 'Annulé ❌' :
+                                                           order.status === 'delivered' || order.status === 'completed' ? 'Livré ✅' :
+                                                           'En cours 🛵'}
+                                                      </span>
+                                                      <h4 className="font-bold text-xs text-gray-900 dark:text-white mt-1.5">Course #{order.id.slice(0, 8)}</h4>
+                                                      <p className="text-[9px] text-gray-400 mt-0.5">{order.created_at ? new Date(order.created_at).toLocaleString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'Récemment'}</p>
+                                                  </div>
+                                                  <div className="text-right">
+                                                      <span className="text-xs font-black text-orange-600 dark:text-brand-400 block">$5.00</span>
+                                                      <span className="text-[8px] text-gray-400 font-bold uppercase block mt-1">Forfait</span>
+                                                  </div>
+                                              </div>
+
+                                              <div className="text-xs space-y-1.5 border-t border-gray-100 dark:border-white/5 pt-3 text-gray-600 dark:text-gray-300">
+                                                  <div>
+                                                      <strong className="text-gray-900 dark:text-white">📍 Retrait : </strong> 
+                                                      <span>{item.pickupAddress || 'Non spécifié'}</span>
+                                                  </div>
+                                                  <div>
+                                                      <strong className="text-gray-900 dark:text-white">🏁 Livraison : </strong> 
+                                                      <span>{item.deliveryAddress || 'Non spécifié'}</span>
+                                                  </div>
+                                                  <div>
+                                                      <strong className="text-gray-900 dark:text-white">📦 Colis : </strong> 
+                                                      <span className="italic">{item.description || 'Colis général'}</span>
+                                                  </div>
+                                                  {(item.recipientName || item.recipientPhone) && (
+                                                      <div>
+                                                          <strong className="text-gray-900 dark:text-white">👤 Destinataire : </strong> 
+                                                          <span>{item.recipientName || ''} {item.recipientPhone ? `(${item.recipientPhone})` : ''}</span>
+                                                      </div>
+                                                  )}
+                                                  {item.courierVehicle && (
+                                                      <div className="flex items-center space-x-1 mt-1 text-[10px] text-orange-600 dark:text-brand-400 font-bold uppercase">
+                                                          <span>Véhicule :</span>
+                                                          <span className="bg-orange-50 dark:bg-brand-500/10 px-1.5 py-0.5 rounded">{item.courierVehicle}</span>
+                                                      </div>
+                                                  )}
+                                              </div>
+
+                                              {/* Live tracking map if active or completed */}
+                                              {['accepted', 'preparing', 'ready', 'delivering', 'delivered', 'completed'].includes(order.status) && (
+                                                  <div className="mt-4 pt-4 border-t border-gray-150 dark:border-white/5">
+                                                      <div className="flex items-center justify-between mb-2.5">
+                                                          <h4 className="text-[10px] font-black text-brand-600 dark:text-brand-400 uppercase tracking-widest flex items-center font-sans">
+                                                              <Navigation size={12} className="mr-1 animate-pulse text-orange-500" /> Suivi de la course en direct
+                                                          </h4>
+                                                          <span className="text-[9px] bg-brand-50 dark:bg-brand-500/10 text-brand-600 dark:text-brand-400 px-2 py-0.5 rounded-full font-black uppercase font-sans">
+                                                              {order.status === 'delivered' || order.status === 'completed' ? 'Livrée ✅' : 'En transit 🛵'}
+                                                          </span>
+                                                      </div>
+                                                      <DeliveryTrackingMap 
+                                                          order={order} 
+                                                          restaurant={null} 
+                                                      />
+                                                  </div>
+                                              )}
+
+                                              {/* Assigned Courier Details & Chat/Call */}
+                                              {order.delivery_person && (
+                                                  <div className="p-3 bg-orange-50/50 dark:bg-brand-500/5 rounded-xl flex items-center justify-between border border-orange-100 dark:border-brand-500/20 mt-2 mb-3 font-sans">
+                                                      <div className="flex items-center space-x-2">
+                                                          <div className="w-8 h-8 rounded-full bg-orange-100 dark:bg-brand-900/30 flex items-center justify-center text-orange-600 dark:text-brand-400 animate-pulse">
+                                                              <Bike size={16} />
+                                                          </div>
+                                                          <div className="min-w-0">
+                                                              <p className="text-[9px] font-black uppercase text-orange-700 dark:text-brand-400 leading-none">Livreur assigné</p>
+                                                              <p className="text-xs font-bold text-gray-900 dark:text-white truncate mt-0.5">{order.delivery_person.full_name}</p>
+                                                          </div>
+                                                      </div>
+                                                      <div className="flex items-center space-x-1.5 shrink-0">
+                                                          {order.delivery_person.phone_number && (
+                                                              <a
+                                                                  href={`tel:${order.delivery_person.phone_number}`}
+                                                                  className="w-8 h-8 rounded-full bg-white dark:bg-gray-800 border border-gray-150 dark:border-gray-750 flex items-center justify-center text-gray-600 dark:text-gray-300 hover:text-orange-600 dark:hover:text-brand-400 transition-colors shadow-xxs"
+                                                                  title="Appeler"
+                                                              >
+                                                                  <Phone size={13} />
+                                                              </a>
+                                                          )}
+                                                          <button
+                                                              onClick={() => setActiveChatLivreur(order)}
+                                                              className="h-8 px-2.5 rounded-full bg-orange-500 hover:bg-orange-600 dark:bg-brand-600 dark:hover:bg-brand-700 text-white flex items-center justify-center space-x-1 text-[9px] font-black uppercase transition-all shadow-md active:scale-95 font-sans"
+                                                          >
+                                                              <MessageSquare size={12} />
+                                                              <span>Chat</span>
+                                                          </button>
+                                                      </div>
+                                                  </div>
+                                              )}
+
+                                              {/* Cancel option for pending/accepted */}
+                                              {(order.status === 'pending' || order.status === 'accepted') && (
+                                                  <div className="pt-2 border-t border-gray-100 dark:border-white/5 flex justify-end">
+                                                      <button
+                                                          onClick={() => handleCancelPrivateCourier(order.id)}
+                                                          className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 dark:bg-red-500/10 dark:hover:bg-red-500/20 rounded-xl text-[10px] font-black uppercase transition-all flex items-center space-x-1"
+                                                      >
+                                                          <X size={12} />
+                                                          <span>Annuler la course</span>
+                                                      </button>
+                                                  </div>
+                                              )}
+                                          </div>
+                                      );
+                                  })}
+                              </div>
+                          )}
+                      </div>
+                  </div>
+                )}
+            </div>
+        </div>
+    );
   };
 
   const renderDeliveryOnboarding = () => {
@@ -2440,7 +3341,24 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                 addToCart(item, resto);
                 toast.success(`🍗 "${item.name}" ajouté au panier !`, { icon: '🛒' });
             }}
+            currentUser={user}
           />
+      )}
+
+      {/* CLIENT CLAIMED OFFERS MODAL */}
+      {isClientOffersOpen && (
+        <ClientClaimedOffersModal
+          user={user}
+          onClose={() => setIsClientOffersOpen(false)}
+        />
+      )}
+
+      {/* ACTIVE CLAIMED OFFER MODAL */}
+      {activeClaimedOffer && (
+        <ClaimedOfferModal
+          offer={activeClaimedOffer}
+          onClose={() => setActiveClaimedOffer(null)}
+        />
       )}
 
       {/* CHAT OVERLAY */}
@@ -2478,6 +3396,109 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
            <p className="text-brand-100">Votre repas est en préparation.</p>
            <div className="mt-8 bg-white/20 p-4 rounded-xl backdrop-blur-sm">
              <p className="font-mono text-sm">Redirection vers le suivi...</p>
+           </div>
+        </div>
+      )}
+
+      {/* KPAY GATEWAY REDIRECTION OVERLAY */}
+      {kpayGatewayUrl && (
+        <div className="absolute inset-0 z-[70] bg-black/85 flex flex-col items-center justify-center text-white p-6 text-center backdrop-blur-sm animate-in fade-in duration-300">
+           <div className="bg-white dark:bg-gray-900 text-gray-900 dark:text-white rounded-[32px] p-8 max-w-md w-full shadow-2xl border border-gray-150 dark:border-gray-800 space-y-6 animate-in zoom-in-95 duration-300">
+             <div className="flex justify-center">
+               <div className="w-20 h-20 bg-brand-50 rounded-full flex items-center justify-center">
+                 <CreditCard className="text-brand-600 animate-pulse" size={40} />
+               </div>
+             </div>
+             
+             <div className="space-y-2 text-center">
+               <h3 className="text-xl sm:text-2xl font-black text-gray-900 dark:text-white font-display uppercase tracking-tight">Portail de paiement KPay</h3>
+               <p className="text-xs text-gray-500 dark:text-gray-400">
+                 Le portail sécurisé de KPay vous permet de finaliser votre commande en toute sécurité.
+               </p>
+             </div>
+
+             <div className="bg-amber-50 dark:bg-amber-950/20 p-4 rounded-2xl border border-amber-200 dark:border-amber-900/30 text-[11px] text-amber-850 dark:text-amber-400 text-left leading-normal space-y-1.5">
+               <p className="font-bold">⚠️ Redirection d'aperçu d'intégration</p>
+               <p>
+                 Si vous utilisez l'environnement de développement ou si un bloqueur de publicités bloque la redirection automatique, cliquez sur le bouton ci-dessous pour ouvrir le portail de paiement KPay dans un nouvel onglet et régler la commande.
+               </p>
+             </div>
+
+             <div className="flex flex-col gap-3">
+               <a 
+                 href={kpayGatewayUrl}
+                 target="_blank"
+                 rel="noopener noreferrer"
+                 className="w-full bg-brand-600 hover:bg-brand-700 text-white py-4 px-6 rounded-2xl font-black shadow-lg shadow-brand-200 dark:shadow-none transition-all flex items-center justify-center gap-2 group text-sm"
+               >
+                 <CreditCard size={18} className="group-hover:scale-110 transition-transform" />
+                 <span>Procéder au paiement sur KPay</span>
+                 <ExternalLink size={14} className="opacity-70" />
+               </a>
+               
+               <button 
+                 onClick={() => {
+                   setKpayGatewayUrl('');
+                   toast.info("Paiement KPay fermé. La commande reste enregistrée en attente de paiement.");
+                 }}
+                 className="w-full py-3 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-750 dark:text-gray-300 rounded-xl text-sm font-bold transition-all"
+               >
+                 Fermer
+               </button>
+             </div>
+           </div>
+        </div>
+      )}
+
+      {/* KPAY USSD POLLING OVERLAY */}
+      {isKpayPolling && (
+        <div className="absolute inset-0 z-[70] bg-black/80 flex flex-col items-center justify-center text-white p-6 text-center backdrop-blur-sm">
+           <div className="bg-white dark:bg-gray-900 text-gray-900 dark:text-white rounded-3xl p-8 max-w-md w-full shadow-2xl border border-gray-100 dark:border-gray-800 space-y-6">
+             <div className="flex justify-center">
+               <div className="relative">
+                 <div className="w-20 h-20 bg-brand-50 rounded-full flex items-center justify-center">
+                   <Smartphone className="text-brand-600 animate-pulse" size={40} />
+                 </div>
+                 <div className="absolute -top-1 -right-1 w-6 h-6 bg-brand-500 rounded-full flex items-center justify-center text-white text-[10px] font-bold animate-ping"></div>
+                 <div className="absolute -top-1 -right-1 w-6 h-6 bg-brand-500 rounded-full flex items-center justify-center text-white text-[10px] font-bold">●</div>
+               </div>
+             </div>
+             
+             <div className="space-y-2 text-center">
+               <h3 className="text-xl sm:text-2xl font-black text-gray-900 dark:text-white font-display">Validation sur votre téléphone</h3>
+               <p className="text-sm text-gray-500 dark:text-gray-400">
+                 Une demande de paiement Mobile Money a été envoyée sur votre téléphone.
+               </p>
+             </div>
+
+             <div className="bg-brand-50 dark:bg-brand-950/20 p-4 rounded-2xl border border-brand-100/50 dark:border-brand-900/30 font-mono text-xs sm:text-sm space-y-1 text-left">
+               <div className="flex justify-between text-xs text-gray-500">
+                 <span>Statut de transaction</span>
+                 <span className="font-bold uppercase text-brand-600">{kpayStatusMessage || 'INITIÉ'}</span>
+               </div>
+               <div className="flex justify-between text-xs sm:text-sm mt-2">
+                 <span>Numéro de paiement</span>
+                 <span className="font-bold text-gray-800 dark:text-gray-200">{kpayCurrentPhone}</span>
+               </div>
+             </div>
+
+             <p className="text-xs text-gray-400 dark:text-gray-500">
+               Veuillez saisir votre code PIN Mobile Money pour valider le débit et finaliser la commande.
+             </p>
+
+             <div className="flex flex-col gap-2">
+               <button 
+                 onClick={() => {
+                   if (kpayIntervalRef.current) clearInterval(kpayIntervalRef.current);
+                   setIsKpayPolling(false);
+                   setIsCheckingOut(false);
+                   toast.info("Transaction KPay interrompue par l'utilisateur.");
+                 }}
+                 className="w-full py-3 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-xl text-sm font-bold transition-all"
+               >
+                 Annuler / Payer autrement
+               </button>
+             </div>
            </div>
         </div>
       )}
@@ -2543,8 +3564,8 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
         <div className="max-w-md md:max-w-7xl mx-auto px-6 py-4 flex flex-col space-y-4">
           <div className="flex items-center justify-between">
           <div className="flex items-center space-x-3">
-            <div className="bg-white dark:bg-brand-600 p-2 rounded-2xl shadow-lg rotate-3 group-hover:rotate-0 transition-transform duration-500">
-               <img src={APP_LOGO_URL} alt="Logo" className="h-6 w-auto" />
+            <div className="bg-brand-500 rounded-xl shadow-lg rotate-3 group-hover:rotate-0 transition-transform duration-500 ring-2 ring-white/20 flex items-center justify-center overflow-hidden w-10 h-10">
+               <img src={APP_LOGO_URL} alt="Logo" className="w-full h-full object-cover" />
             </div>
             <div>
               <h1 className="text-xl font-display font-black text-white dark:text-white tracking-tight uppercase leading-none">DashMeals</h1>
@@ -2688,22 +3709,37 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                   </button>
 
                   {user.id !== 'guest' && (
-                    <button 
-                      onClick={() => { setShowNotifications(true); setShowMenuDropdown(false); }} 
-                      className="w-full text-left px-3 py-2.5 rounded-xl text-xs font-bold text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-white/5 transition-all flex items-center justify-between"
-                    >
-                      <span className="flex items-center space-x-2.5">
-                        <Bell size={15} />
-                        <span>Notifications</span>
-                      </span>
-                      {unreadCount > 0 ? (
-                        <span className="bg-red-500 text-white text-[10px] px-2 py-0.5 rounded-full font-black animate-bounce">
-                          {unreadCount}
+                    <>
+                      <button 
+                        onClick={() => { setIsClientOffersOpen(true); setShowMenuDropdown(false); }} 
+                        className="w-full text-left px-3 py-2.5 rounded-xl text-xs font-bold text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-white/5 transition-all flex items-center justify-between"
+                      >
+                        <span className="flex items-center space-x-2.5">
+                          <Ticket size={15} className="text-brand-500" />
+                          <span>Mes Codes Offres & Promos</span>
                         </span>
-                      ) : (
-                        <span className="text-[10px] opacity-65">Aucune</span>
-                      )}
-                    </button>
+                        <span className="text-[9px] bg-brand-100 text-brand-600 dark:bg-brand-950 dark:text-brand-400 px-2 py-0.5 rounded-full font-black">
+                          🎟️ Codes
+                        </span>
+                      </button>
+
+                      <button 
+                        onClick={() => { setShowNotifications(true); setShowMenuDropdown(false); }} 
+                        className="w-full text-left px-3 py-2.5 rounded-xl text-xs font-bold text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-white/5 transition-all flex items-center justify-between"
+                      >
+                        <span className="flex items-center space-x-2.5">
+                          <Bell size={15} />
+                          <span>Notifications</span>
+                        </span>
+                        {unreadCount > 0 ? (
+                          <span className="bg-red-500 text-white text-[10px] px-2 py-0.5 rounded-full font-black animate-bounce">
+                            {unreadCount}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] opacity-65">Aucune</span>
+                        )}
+                      </button>
+                    </>
                   )}
 
                   {user.role === 'superadmin' && onGoToAdmin && (
@@ -2718,6 +3754,16 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
 
                   {user.id !== 'guest' ? (
                     <>
+                      <button 
+                        onClick={() => { setViewMode('private_courier'); setShowMenuDropdown(false); }} 
+                        className={`w-full text-left px-3 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center space-x-2.5 ${viewMode === 'private_courier' ? 'bg-orange-50 text-orange-600 dark:bg-brand-500/10 dark:text-brand-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-white/5'}`}
+                      >
+                        <ShoppingBag size={15} className="text-orange-500" />
+                        <span className="flex-1 flex justify-between items-center">
+                          <span>Course Privée 📦</span>
+                          <span className="text-[8px] bg-orange-100 text-orange-600 px-1.5 py-0.5 rounded font-black uppercase">Forfait</span>
+                        </span>
+                      </button>
                       <button 
                         onClick={() => { navigateTo('settings'); setShowMenuDropdown(false); }} 
                         className={`w-full text-left px-3 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center space-x-2.5 ${viewMode === 'settings' ? 'bg-orange-50 text-orange-600 dark:bg-brand-500/10 dark:text-brand-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-white/5'}`}
@@ -2788,7 +3834,7 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
           {viewMode === 'list' || viewMode === 'map' ? (
             <>
                 {/* MARKETING CAMPAIGN BANNER (MARQUEE) */}
-                {!searchQuery && Object.values(promotionsMap).flat().some(promo => restaurants.some(r => r.id === promo.restaurantId)) && (
+                {!searchQuery && (Object.values(promotionsMap).flat() as Promotion[]).some(promo => restaurants.some(r => r.id === promo.restaurantId)) && (
                     <div className="mb-4 -mx-4 overflow-hidden bg-brand-500 text-white relative block border-b border-brand-400 group">
                         <div className="flex w-max animate-marquee group-hover:[animation-play-state:paused] whitespace-nowrap py-2 items-center">
                             {[...(Object.values(promotionsMap).flat() as Promotion[]), ...(Object.values(promotionsMap).flat() as Promotion[]), ...(Object.values(promotionsMap).flat() as Promotion[]), ...(Object.values(promotionsMap).flat() as Promotion[])].map((promo, idx) => {
@@ -2856,6 +3902,24 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                     </div>
                 </div>
 
+                {/* PRIVATE COURIER BANNER / CARD */}
+                <div className="mb-8 bg-gradient-to-r from-orange-500 to-amber-500 rounded-[32px] p-6 text-white shadow-xl relative overflow-hidden flex flex-col md:flex-row md:items-center md:justify-between animate-in slide-in-from-top duration-500">
+                    <div className="absolute right-0 bottom-0 opacity-10 transform translate-x-4 translate-y-4 scale-150 pointer-events-none">
+                        <ShoppingBag size={140} />
+                    </div>
+                    <div className="mb-4 md:mb-0 relative z-10 max-w-lg">
+                        <span className="bg-white/20 text-white font-extrabold text-[9px] uppercase tracking-widest px-2.5 py-1 rounded-full">Nouveau Service ⚡</span>
+                        <h3 className="text-xl font-black mt-2 leading-tight">Besoin d'une course privée ?</h3>
+                        <p className="text-xs text-white/95 mt-1.5 leading-relaxed">Faites livrer ou récupérer un colis, pli, clés ou tout autre objet par un livreur partenaire en un clic ! Forfait simple et rapide.</p>
+                    </div>
+                    <button 
+                        onClick={() => setViewMode('private_courier')} 
+                        className="bg-white text-orange-600 hover:bg-orange-50 active:scale-95 transition-all py-3 px-5 rounded-2xl font-black text-xs uppercase tracking-wider shadow-md self-start md:self-center relative z-10"
+                    >
+                        Demander un livreur 📦
+                    </button>
+                </div>
+
                 {/* VIEW TOGGLE (Restaurants vs Plats) */}
                 {!searchQuery && (
                     <div className="flex bg-gray-100/50 dark:bg-white/5 p-1.5 rounded-[22px] mb-10 shadow-inner border border-gray-200/50 dark:border-white/5 backdrop-blur-sm">
@@ -2882,17 +3946,35 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                             Commandez à nouveau
                         </h2>
                         <div className="flex overflow-x-auto no-scrollbar space-x-3 pb-2">
-                            {recentOrderedItems.map(item => (
+                            {recentOrderedItems.map(item => {
+                                const promo = getPromoDetails(item, item.restaurant.id);
+                                const hasPromo = promo && promo.promoPrice !== null;
+                                const finalPrice = hasPromo ? promo.promoPrice : item.price;
+                                return (
                                 <div 
                                     key={item.id}
                                     onClick={() => { setSelectedRestaurant(item.restaurant); navigateTo('restaurant_detail'); }}
-                                    className="flex-shrink-0 w-36 bg-white dark:bg-gray-800 rounded-2xl p-2 border border-gray-100 dark:border-gray-700 shadow-sm hover:shadow-md transition-all cursor-pointer"
+                                    className="flex-shrink-0 w-36 bg-white dark:bg-gray-800 rounded-2xl p-2 border border-gray-100 dark:border-gray-700 shadow-sm hover:shadow-md transition-all cursor-pointer relative"
                                 >
+                                    {hasPromo && (
+                                        <div className="absolute top-3 left-3 z-10 bg-red-500 text-white text-[8px] font-black px-1.5 py-0.5 rounded shadow border border-red-400 animate-pulse">
+                                            {promo.badgeText || "PROMO"}
+                                        </div>
+                                    )}
                                     <img src={item.image} className="w-full h-24 object-cover rounded-xl mb-2" alt={item.name} />
                                     <h4 className="text-[10px] font-black text-gray-900 dark:text-white truncate mb-0.5">{item.name}</h4>
                                     <p className="text-[8px] text-gray-400 truncate mb-1.5">{item.restaurant.name}</p>
                                     <div className="flex items-center justify-between">
-                                        <span className="text-[10px] font-bold text-brand-600">{item.restaurant.currency === 'CDF' ? `${item.price} FC` : `$${item.price}`}</span>
+                                        <div className="flex flex-col">
+                                            {hasPromo && (
+                                                <span className="text-[8px] text-gray-400 line-through">
+                                                    {item.restaurant.currency === 'CDF' ? `${item.price} FC` : `$${item.price}`}
+                                                </span>
+                                            )}
+                                            <span className="text-[10px] font-bold text-brand-600">
+                                                {item.restaurant.currency === 'CDF' ? `${finalPrice} FC` : `$${finalPrice}`}
+                                            </span>
+                                        </div>
                                         <div className="flex items-center space-x-1">
                                             {cart.find(c => c.id === item.id) && (
                                                 <span className="text-[10px] font-black text-brand-600 bg-brand-50 px-1.5 py-0.5 rounded-md">x{cart.find(c => c.id === item.id)?.quantity}</span>
@@ -2906,7 +3988,8 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                                         </div>
                                     </div>
                                 </div>
-                            ))}
+                                );
+                            })}
                         </div>
                     </div>
                 )}
@@ -2971,12 +4054,33 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                                         
                                         {/* Mini Menu (2 items) */}
                                         <div className="space-y-1.5 mb-2">
-                                            {r.menu?.slice(0, 2).map(item => (
-                                                <div key={item.id} className="flex items-center justify-between">
-                                                    <span className="text-[10px] text-gray-500 dark:text-gray-400 truncate max-w-[140px] transition-all">{item.name}</span>
-                                                    <span className="text-[10px] font-bold text-brand-600">{r.currency === 'CDF' ? `${item.price} FC` : `$${item.price}`}</span>
-                                                </div>
-                                            ))}
+                                            {r.menu?.slice(0, 2).map(item => {
+                                                const promo = getPromoDetails(item, r.id);
+                                                const hasPromo = promo && promo.promoPrice !== null;
+                                                const finalPrice = hasPromo ? promo.promoPrice : item.price;
+                                                return (
+                                                    <div key={item.id} className="flex items-center justify-between">
+                                                        <span className="text-[10px] text-gray-500 dark:text-gray-400 truncate max-w-[140px] transition-all flex items-center">
+                                                            {item.name}
+                                                            {hasPromo && (
+                                                                <span className="ml-1 text-[8px] font-black text-red-500 bg-red-50 dark:bg-red-950/40 px-1 rounded animate-pulse">
+                                                                    %
+                                                                </span>
+                                                            )}
+                                                        </span>
+                                                        <div className="flex items-center space-x-1.5">
+                                                            {hasPromo && (
+                                                                <span className="text-[8px] text-gray-400 line-through">
+                                                                    {r.currency === 'CDF' ? `${item.price} FC` : `$${item.price}`}
+                                                                </span>
+                                                            )}
+                                                            <span className="text-[10px] font-bold text-brand-600">
+                                                                {r.currency === 'CDF' ? `${finalPrice} FC` : `$${finalPrice}`}
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
                                         </div>
 
                                         <div className="pt-2 border-t border-gray-100 dark:border-gray-700 flex items-center justify-between">
@@ -3272,13 +4376,30 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                                 ? discoverableItems.filter(item => item.name.toLowerCase().includes(searchQuery.toLowerCase()) || item.restaurant.name.toLowerCase().includes(searchQuery.toLowerCase()))
                                 : discoverableItems).map(item => {
                                     const isNew = item.createdAt ? (new Date().getTime() - new Date(item.createdAt).getTime()) / (1000 * 3600 * 24) <= 5 : false;
+                                    const promo = getPromoDetails(item, item.restaurant.id);
+                                    const hasPromo = promo && promo.isPromo;
+                                    const promoPrice = promo?.promoPrice;
+                                    const promoBadge = promo?.badgeText || "PROMO";
+                                    const finalPrice = hasPromo && promoPrice !== null ? promoPrice : item.price;
                                     return (
                                 <div 
                                     key={`${item.restaurant.id}-${item.id}`}
                                     className="glass rounded-[32px] overflow-hidden shadow-sm border border-white/40 dark:border-white/5 flex flex-col group hover:shadow-2xl hover:border-brand-500/30 transition-all duration-700 active:scale-[0.98] transform hover:-translate-y-2 relative"
                                 >
-                                    {isNew && (
+                                    {hasPromo && (
+                                        <div className="absolute top-4 left-4 z-10 flex items-center space-x-1 bg-red-500 text-white px-2 py-1 rounded-lg shadow-lg border border-red-400 animate-pulse">
+                                            <Zap size={10} className="fill-white" />
+                                            <span className="text-[10px] font-black uppercase tracking-widest">{promoBadge}</span>
+                                        </div>
+                                    )}
+                                    {isNew && !hasPromo && (
                                         <div className="absolute top-4 left-4 z-10 flex items-center space-x-1 bg-green-500 text-white px-2 py-1 rounded-lg shadow-lg border border-green-400">
+                                            <Sparkles size={10} />
+                                            <span className="text-[10px] font-black uppercase tracking-widest">New</span>
+                                        </div>
+                                    )}
+                                    {isNew && hasPromo && (
+                                        <div className="absolute top-14 left-4 z-10 flex items-center space-x-1 bg-green-500 text-white px-2 py-1 rounded-lg shadow-lg border border-green-400">
                                             <Sparkles size={10} />
                                             <span className="text-[10px] font-black uppercase tracking-widest">New</span>
                                         </div>
@@ -3289,9 +4410,14 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                                         <div className="absolute bottom-4 left-4 right-4">
                                             <p className="text-[9px] font-black text-white/90 uppercase drop-shadow-2xl truncate tracking-widest">{item.restaurant.name}</p>
                                         </div>
-                                        <div className="absolute top-4 right-4">
-                                            <div className="bg-black/40 backdrop-blur-xl px-3 py-1.5 rounded-2xl text-[11px] font-black text-white shadow-2xl border border-white/20 whitespace-nowrap">
-                                                {formatDualPrice(item.price, item.restaurant.currency as 'USD' | 'CDF', item.restaurant.exchangeRate, item.restaurant.displayCurrencyMode)}
+                                        <div className="absolute top-4 right-4 flex flex-col items-end space-y-1 z-10">
+                                            {hasPromo && promoPrice !== null && (
+                                                <div className="bg-black/60 backdrop-blur-md px-2 py-0.5 rounded-lg text-[9px] font-bold text-white/70 line-through border border-white/10 shadow-sm">
+                                                    {formatDualPrice(item.price, item.restaurant.currency as 'USD' | 'CDF', item.restaurant.exchangeRate || appSettings?.payment_exchange_rate || 2850, item.restaurant.displayCurrencyMode)}
+                                                </div>
+                                            )}
+                                            <div className="bg-brand-600 backdrop-blur-xl px-3 py-1.5 rounded-2xl text-[11px] font-black text-white shadow-2xl border border-white/20 whitespace-nowrap">
+                                                {formatDualPrice(finalPrice, item.restaurant.currency as 'USD' | 'CDF', item.restaurant.exchangeRate || appSettings?.payment_exchange_rate || 2850, item.restaurant.displayCurrencyMode)}
                                             </div>
                                         </div>
                                     </div>
@@ -3430,17 +4556,39 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                                 <span className="w-2 h-2 bg-emerald-500 rounded-full animate-ping"></span>
                             </h3>
                             <div className="flex items-center space-x-3 text-sm text-gray-700 dark:text-gray-300">
-                                <span className="flex-1 flex items-center justify-center bg-gray-50 dark:bg-gray-900 px-3 py-2.5 rounded-xl font-bold"><Navigation size={13} className="mr-1.5 text-brand-500"/> {formatDistance(selectedRestaurant.distance || 0)}</span>
+                                <span className="flex-1 flex items-center justify-center bg-gray-50 dark:bg-gray-900 px-3 py-2.5 rounded-xl font-bold">
+                                    <Navigation size={13} className="mr-1.5 text-brand-500"/> 
+                                    {selectedRestaurantRouteMoto 
+                                        ? `${selectedRestaurantRouteMoto.distanceKm} km (réel)` 
+                                        : formatDistance(selectedRestaurant.distance || 0)
+                                    }
+                                </span>
                                 <span className="flex-1 flex items-center justify-center bg-gray-50 dark:bg-gray-900 px-3 py-2.5 rounded-xl font-bold"><Zap size={13} className="mr-1.5 text-yellow-500 fill-yellow-400"/> {selectedRestaurant.preparationTime} min</span>
                             </div>
                             <div className="grid grid-cols-2 gap-3.5">
                                  <div className="flex items-center p-3 bg-orange-50 dark:bg-orange-950/20 rounded-2xl text-orange-700 dark:text-orange-400 border border-orange-100/30 dark:border-orange-900/20">
                                     <Bike size={18} className="mr-2.5 shrink-0" />
-                                    <div className="truncate"><p className="text-[8px] font-black uppercase tracking-wider opacity-60">En Moto</p><p className="font-extrabold text-[13px] leading-tight text-orange-850 dark:text-orange-300">{selectedRestaurant.timeMoto ? formatTime(selectedRestaurant.timeMoto) : '--'}</p></div>
+                                    <div className="truncate">
+                                        <p className="text-[8px] font-black uppercase tracking-wider opacity-60">En Moto</p>
+                                        <p className="font-extrabold text-[13px] leading-tight text-orange-850 dark:text-orange-300">
+                                            {selectedRestaurantRouteMoto 
+                                                ? `${selectedRestaurantRouteMoto.durationMin} min (itinéraire)` 
+                                                : (selectedRestaurant.timeMoto ? formatTime(selectedRestaurant.timeMoto) : '--')
+                                            }
+                                        </p>
+                                    </div>
                                 </div>
                                 <div className="flex items-center p-3 bg-blue-50 dark:bg-blue-950/20 rounded-2xl text-blue-700 dark:text-blue-400 border border-blue-100/30 dark:border-blue-900/20">
                                     <Footprints size={18} className="mr-2.5 shrink-0" />
-                                    <div className="truncate"><p className="text-[8px] font-black uppercase tracking-wider opacity-60">À pied</p><p className="font-extrabold text-[13px] leading-tight text-blue-850 dark:text-blue-300">{selectedRestaurant.timeWalking ? formatTime(selectedRestaurant.timeWalking) : '--'}</p></div>
+                                    <div className="truncate">
+                                        <p className="text-[8px] font-black uppercase tracking-wider opacity-60">À pied</p>
+                                        <p className="font-extrabold text-[13px] leading-tight text-blue-850 dark:text-blue-300">
+                                            {selectedRestaurantRouteWalk 
+                                                ? `${selectedRestaurantRouteWalk.durationMin} min (itinéraire)` 
+                                                : (selectedRestaurant.timeWalking ? formatTime(selectedRestaurant.timeWalking) : '--')
+                                            }
+                                        </p>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -3575,7 +4723,7 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
 
                             {/* MENU CATEGORY FILTER */}
                             <div className="flex space-x-2 overflow-x-auto no-scrollbar mb-6 pb-1">
-                                {['Tous', 'entrée', 'plat', 'dessert', 'boisson'].map((cat) => (
+                                {['Tous', ...Array.from(new Set(selectedRestaurant.menu.map(item => item.category).filter(Boolean)))].map((cat) => (
                                     <button
                                         key={cat}
                                         onClick={() => setSelectedMenuCategory(cat)}
@@ -3588,7 +4736,8 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                                         {cat === 'entrée' ? 'Entrées' : 
                                          cat === 'plat' ? 'Plats' : 
                                          cat === 'dessert' ? 'Desserts' : 
-                                         cat === 'boisson' ? 'Boissons' : 'Tout'}
+                                         cat === 'boisson' ? 'Boissons' : 
+                                         cat === 'Tous' ? 'Tout' : cat}
                                     </button>
                                 ))}
                             </div>
@@ -3605,10 +4754,19 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                                     .filter(item => selectedMenuCategory === 'Tous' || item.category === selectedMenuCategory)
                                     .map(item => {
                                         const isNew = item.createdAt ? (new Date().getTime() - new Date(item.createdAt).getTime()) / (1000 * 3600 * 24) <= 5 : false;
+                                        const promo = getPromoDetails(item, selectedRestaurant.id);
+                                        const hasPromo = promo && promo.isPromo;
+                                        const promoBadge = promo?.badgeText || "PROMO";
+                                        const promoPrice = promo?.promoPrice;
                                         return (
                                         <div key={item.id} className={`bg-gray-50 dark:bg-gray-901 p-3.5 rounded-2xl border border-gray-100 dark:border-gray-750 shadow-sm flex space-x-3.5 hover:shadow-md transition-shadow duration-300 relative overflow-hidden group ${!item.isAvailable ? 'opacity-55 grayscale' : ''}`}>
                                             <div className="relative w-20 h-20 rounded-xl overflow-hidden shrink-0 bg-gray-200 dark:bg-gray-800">
                                                 <img src={item.image} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" alt={item.name} />
+                                                {hasPromo && (
+                                                    <div className="absolute top-1 left-1 bg-red-500 text-white text-[8px] font-black px-1.5 py-0.5 rounded shadow border border-red-400 animate-pulse uppercase tracking-wider z-10">
+                                                        {promoBadge}
+                                                    </div>
+                                                )}
                                             </div>
                                             <div className="flex-1 flex flex-col justify-between min-w-0 relative">
                                                 {isNew && (
@@ -3641,9 +4799,21 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                                                     </div>
                                                 </div>
                                                 <div className="flex justify-between items-end mt-2">
-                                                    <span className="font-black text-brand-600 dark:text-brand-400 text-xs md:text-sm whitespace-nowrap">
-                                                        {formatDualPrice(item.price || 0, selectedRestaurant?.currency as 'USD' | 'CDF' || 'USD', selectedRestaurant?.exchangeRate, selectedRestaurant?.displayCurrencyMode)}
-                                                    </span>
+                                                    <div className="flex flex-col">
+                                                        {hasPromo && promoPrice !== null && (
+                                                            <span className="text-[9px] text-gray-450 dark:text-gray-400 line-through">
+                                                                {formatDualPrice(item.price || 0, selectedRestaurant?.currency as 'USD' | 'CDF' || 'USD', selectedRestaurant?.exchangeRate || appSettings?.payment_exchange_rate || 2850, selectedRestaurant?.displayCurrencyMode)}
+                                                            </span>
+                                                        )}
+                                                        <span className="font-black text-brand-600 dark:text-brand-400 text-xs md:text-sm whitespace-nowrap">
+                                                            {formatDualPrice(
+                                                                (hasPromo && promoPrice !== null) ? promoPrice : (item.price || 0),
+                                                                selectedRestaurant?.currency as 'USD' | 'CDF' || 'USD',
+                                                                selectedRestaurant?.exchangeRate || appSettings?.payment_exchange_rate || 2850,
+                                                                selectedRestaurant?.displayCurrencyMode
+                                                            )}
+                                                        </span>
+                                                    </div>
                                                     <div className="flex items-center space-x-2 shrink-0">
                                                         {cart.find(c => c.id === item.id) && (
                                                             <span className="text-[10px] font-black bg-brand-100 dark:bg-brand-900/50 text-brand-700 dark:text-brand-300 px-2 py-0.5 rounded-md">
@@ -3687,12 +4857,14 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                                 <span className="font-bold">{t('view_cart')}</span>
                             </div>
                             <span className="font-black text-lg">
-                                {formatDualPrice(cartTotal, selectedRestaurant?.currency as 'USD' | 'CDF' || 'USD', selectedRestaurant?.exchangeRate, selectedRestaurant?.displayCurrencyMode)}
+                                {formatDualPrice(cartTotal, selectedRestaurant?.currency as 'USD' | 'CDF' || 'USD', selectedRestaurant?.exchangeRate || appSettings?.payment_exchange_rate || 2850, selectedRestaurant?.displayCurrencyMode)}
                             </span>
                         </button>
                     </div>
                 )}
             </div>
+        ) : viewMode === 'private_courier' ? (
+            renderPrivateCourierView()
         ) : viewMode === 'orders' ? (
             <OrdersView 
                 orders={orders} 
@@ -3852,11 +5024,9 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                                                         onChange={(e) => setProfileCity(e.target.value)} 
                                                         className="w-full p-3 border border-gray-200 dark:border-gray-700 rounded-2xl text-sm font-sans font-semibold text-gray-800 dark:text-white dark:bg-gray-900 focus:ring-2 focus:ring-brand-500 focus:border-brand-500 outline-none"
                                                     >
-                                                        <option value="Kinshasa">Kinshasa</option>
-                                                        <option value="Lubumbashi">Lubumbashi</option>
-                                                        <option value="Goma">Goma</option>
-                                                        <option value="Kisangani">Kisangani</option>
-                                                        <option value="Bukavu">Bukavu</option>
+                                                        {CITIES_RDC.map(city => (
+                                                            <option key={city} value={city}>{city}</option>
+                                                        ))}
                                                     </select>
                                                 </div>
                                             </div>
@@ -4183,7 +5353,7 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
         total={cartTotal} 
         isLoading={isCheckingOut} 
         currency={allRestaurants.find(r => r.id === cart[0]?.restaurantId)?.currency} 
-        exchangeRate={allRestaurants.find(r => r.id === cart[0]?.restaurantId)?.exchangeRate}
+        exchangeRate={allRestaurants.find(r => r.id === cart[0]?.restaurantId)?.exchangeRate || appSettings?.payment_exchange_rate || 2850}
         displayCurrencyMode={allRestaurants.find(r => r.id === cart[0]?.restaurantId)?.displayCurrencyMode}
         paymentConfig={allRestaurants.find(r => r.id === cart[0]?.restaurantId)?.paymentConfig}
         language={language}

@@ -70,13 +70,18 @@ export const CartDrawer: React.FC<Props> = ({
   const [addressDetails, setAddressDetails] = useState('');
   const [customName, setCustomName] = useState(userName || '');
   const [customPhone, setCustomPhone] = useState(userPhone || '');
+  const [kpayPhone, setKpayPhone] = useState(userPhone || '');
+  const [kpayProvider, setKpayProvider] = useState<'VODACOM_MPESA_COD' | 'AIRTEL_COD' | 'ORANGE_COD'>('VODACOM_MPESA_COD');
 
   React.useEffect(() => {
     if (userName) setCustomName(userName);
   }, [userName]);
 
   React.useEffect(() => {
-    if (userPhone) setCustomPhone(userPhone);
+    if (userPhone) {
+      setCustomPhone(userPhone);
+      setKpayPhone(userPhone);
+    }
   }, [userPhone]);
 
   React.useEffect(() => {
@@ -93,12 +98,12 @@ export const CartDrawer: React.FC<Props> = ({
   }, [items[0]?.restaurantId]);
 
   const DELIVERY_FEE_USD = 2.5;
-  const exchangeRateVal = exchangeRate || 2500;
+  const exchangeRateVal = exchangeRate || 2850;
   const isCDF = currency === 'CDF';
   const deliveryFeeInCurrency = fulfillmentMode === 'pickup' ? 0 : (isCDF ? (DELIVERY_FEE_USD * exchangeRateVal) : DELIVERY_FEE_USD);
 
   const formatPrice = (amount: number) => {
-      return formatDualPrice(amount, currency as 'USD' | 'CDF', exchangeRate, displayCurrencyMode as 'dual' | 'usd' | 'cdf');
+      return formatDualPrice(amount, currency as 'USD' | 'CDF', exchangeRateVal, displayCurrencyMode as 'dual' | 'usd' | 'cdf');
   };
 
    const handleNextStep = () => {
@@ -121,6 +126,10 @@ export const CartDrawer: React.FC<Props> = ({
         toast.error(t('payment_proof_error'));
         return;
       }
+      if (selectedMethod === 'kpay' && !kpayPhone) {
+        toast.error("Veuillez saisir votre numéro Mobile Money pour KPay.");
+        return;
+      }
 
       const fullLocation = fulfillmentMode === 'pickup'
         ? {
@@ -133,7 +142,11 @@ export const CartDrawer: React.FC<Props> = ({
             address: addressDetails ? `${addressDetails}` : deliveryLocation.address
           } : undefined);
 
-      onCheckout(selectedMethod, selectedNetwork || undefined, isUrgent, paymentProof || undefined, fullLocation, customName, customPhone, deliveryFeeInCurrency);
+      if (selectedMethod === 'kpay') {
+        onCheckout('kpay', kpayProvider as any, isUrgent, undefined, fullLocation, customName, kpayPhone, deliveryFeeInCurrency);
+      } else {
+        onCheckout(selectedMethod, selectedNetwork || undefined, isUrgent, paymentProof || undefined, fullLocation, customName, customPhone, deliveryFeeInCurrency);
+      }
     }
   };
 
@@ -156,7 +169,7 @@ export const CartDrawer: React.FC<Props> = ({
       if (!customName || customName.trim() === '') return false;
       return fulfillmentMode === 'pickup' || deliveryLocation !== null;
     }
-    if (step === 3) return (selectedMethod === 'cash' || (selectedMethod === 'mobile_money' && selectedNetwork));
+    if (step === 3) return (selectedMethod === 'cash' || (selectedMethod === 'mobile_money' && selectedNetwork) || (selectedMethod === 'kpay' && kpayPhone && kpayProvider));
     return false;
   };
 
@@ -424,6 +437,22 @@ export const CartDrawer: React.FC<Props> = ({
                       </div>
                     </button>
                   )}
+
+                  <button 
+                    onClick={() => setSelectedMethod('kpay')}
+                    className={`flex items-center p-4 border-2 rounded-2xl transition-all ${selectedMethod === 'kpay' ? 'border-brand-500 bg-brand-50 shadow-md' : 'border-gray-100 hover:border-gray-200 hover:bg-gray-50'}`}
+                  >
+                    <div className={`w-12 h-12 rounded-full flex items-center justify-center mr-4 transition-colors ${selectedMethod === 'kpay' ? 'bg-brand-500 text-white' : 'bg-gray-100 text-gray-500'}`}>
+                      <CreditCard size={24} />
+                    </div>
+                    <div className="text-left flex-1">
+                      <p className="font-bold text-gray-900">KPay</p>
+                      <p className="text-xs text-gray-500 mt-0.5">Paiement sécurisé via KPay</p>
+                    </div>
+                    <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center ${selectedMethod === 'kpay' ? 'border-brand-500 bg-brand-500' : 'border-gray-300'}`}>
+                      {selectedMethod === 'kpay' && <CheckCircle2 className="text-white" size={16} />}
+                    </div>
+                  </button>
                 </div>
               </div>
 
@@ -548,6 +577,134 @@ export const CartDrawer: React.FC<Props> = ({
                       </div>
                     </div>
                   )}
+                </div>
+              )}
+
+              {selectedMethod === 'kpay' && (
+                <div className="animate-in fade-in slide-in-from-top-4 duration-300 bg-gray-50 p-4 rounded-2xl border border-gray-200 space-y-4">
+                  <p className="text-xs font-bold text-gray-500 uppercase tracking-wider">Sélectionnez votre réseau pour KPay USSD</p>
+                  <div className="grid grid-cols-3 gap-3">
+                    <button 
+                      type="button"
+                      onClick={() => setKpayProvider('VODACOM_MPESA_COD')}
+                      className={`flex flex-col items-center p-3 border-2 rounded-xl transition-all ${kpayProvider === 'VODACOM_MPESA_COD' ? 'border-brand-500 bg-white shadow-sm' : 'border-transparent bg-gray-100 hover:bg-gray-200'}`}
+                    >
+                      <div className="w-10 h-10 bg-red-600 rounded-full flex items-center justify-center text-white font-black text-[10px] mb-2 shadow-sm">M-PESA</div>
+                      <span className="text-xs font-bold text-gray-700">M-Pesa</span>
+                    </button>
+                    <button 
+                      type="button"
+                      onClick={() => setKpayProvider('AIRTEL_COD')}
+                      className={`flex flex-col items-center p-3 border-2 rounded-xl transition-all ${kpayProvider === 'AIRTEL_COD' ? 'border-brand-500 bg-white shadow-sm' : 'border-transparent bg-gray-100 hover:bg-gray-200'}`}
+                    >
+                      <div className="w-10 h-10 bg-red-500 rounded-full flex items-center justify-center text-white font-black text-[10px] mb-2 shadow-sm">AIRTEL</div>
+                      <span className="text-xs font-bold text-gray-700">Airtel</span>
+                    </button>
+                    <button 
+                      type="button"
+                      onClick={() => setKpayProvider('ORANGE_COD')}
+                      className={`flex flex-col items-center p-3 border-2 rounded-xl transition-all ${kpayProvider === 'ORANGE_COD' ? 'border-brand-500 bg-white shadow-sm' : 'border-transparent bg-gray-100 hover:bg-gray-200'}`}
+                    >
+                      <div className="w-10 h-10 bg-orange-500 rounded-full flex items-center justify-center text-white font-black text-[10px] mb-2 shadow-sm">ORANGE</div>
+                      <span className="text-xs font-bold text-gray-700">Orange</span>
+                    </button>
+                  </div>
+
+                  {/* Converted Amount Info Block */}
+                  <div className="bg-brand-50/70 dark:bg-brand-950/10 border border-brand-100 dark:border-brand-900/30 p-3.5 rounded-xl space-y-1">
+                    <p className="text-[10px] font-black text-brand-700 dark:text-brand-400 uppercase tracking-wider">Montant converti en CDF (Franc Congolais)</p>
+                    <div className="flex justify-between items-baseline">
+                      <span className="text-lg font-black text-brand-600 dark:text-brand-400">
+                        {new Intl.NumberFormat('fr-FR').format(Math.round((total + deliveryFeeInCurrency) * exchangeRateVal))} FC
+                      </span>
+                      <span className="text-[10px] font-bold text-gray-500 dark:text-gray-400">
+                        Taux : 1 USD = {exchangeRateVal} CDF
+                      </span>
+                    </div>
+                    <p className="text-[9px] text-gray-400 dark:text-gray-500 leading-tight">Le paiement s'effectue en Francs Congolais conformément au taux configuré par les administrateurs.</p>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-black text-gray-500 uppercase tracking-widest font-display">Numéro de téléphone Mobile Money *</label>
+                    <div className="relative">
+                      <Phone className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+                      <input 
+                        type="text"
+                        value={kpayPhone}
+                        onChange={(e) => setKpayPhone(e.target.value)}
+                        placeholder="Ex: 0821234567, 0991234567..."
+                        className="w-full pl-10 p-3.5 border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 rounded-xl focus:ring-2 focus:ring-brand-500 outline-none font-mono text-sm font-semibold text-gray-800"
+                      />
+                    </div>
+                    <p className="text-[10px] text-gray-500 leading-normal">Un message de confirmation USSD Push sera envoyé sur ce téléphone pour valider le montant.</p>
+                  </div>
+
+                  {/* Sandbox helper block */}
+                  <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200/50 dark:border-amber-900/30 p-3 rounded-xl space-y-1.5">
+                    <p className="text-[10px] font-bold text-amber-800 dark:text-amber-400 uppercase tracking-wider flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+                      Mode Test (Sandbox) - Numéros de simulation
+                    </p>
+                    <p className="text-[10px] text-amber-700/80 dark:text-amber-500 leading-normal">
+                      Cliquez sur un numéro de test ci-dessous pour remplir le champ :
+                    </p>
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {kpayProvider === 'VODACOM_MPESA_COD' && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => setKpayPhone('243810000001')}
+                            className="bg-white hover:bg-amber-100 border border-amber-200 dark:bg-gray-900 text-[10px] font-bold py-1 px-2 rounded-md text-amber-800 dark:text-amber-300 shadow-sm transition-all"
+                          >
+                            Vodacom (Succès) : 243810000001
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setKpayPhone('243810000002')}
+                            className="bg-white hover:bg-amber-100 border border-amber-200 dark:bg-gray-900 text-[10px] font-bold py-1 px-2 rounded-md text-amber-800 dark:text-amber-300 shadow-sm transition-all"
+                          >
+                            Vodacom (Échec) : 243810000002
+                          </button>
+                        </>
+                      )}
+                      {kpayProvider === 'AIRTEL_COD' && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => setKpayPhone('243990000001')}
+                            className="bg-white hover:bg-amber-100 border border-amber-200 dark:bg-gray-900 text-[10px] font-bold py-1 px-2 rounded-md text-amber-800 dark:text-amber-300 shadow-sm transition-all"
+                          >
+                            Airtel (Succès) : 243990000001
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setKpayPhone('243990000002')}
+                            className="bg-white hover:bg-amber-100 border border-amber-200 dark:bg-gray-900 text-[10px] font-bold py-1 px-2 rounded-md text-amber-800 dark:text-amber-300 shadow-sm transition-all"
+                          >
+                            Airtel (Échec) : 243990000002
+                          </button>
+                        </>
+                      )}
+                      {kpayProvider === 'ORANGE_COD' && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => setKpayPhone('243890000001')}
+                            className="bg-white hover:bg-amber-100 border border-amber-200 dark:bg-gray-900 text-[10px] font-bold py-1 px-2 rounded-md text-amber-800 dark:text-amber-300 shadow-sm transition-all"
+                          >
+                            Orange (Succès) : 243890000001
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setKpayPhone('243890000002')}
+                            className="bg-white hover:bg-amber-100 border border-amber-200 dark:bg-gray-900 text-[10px] font-bold py-1 px-2 rounded-md text-amber-800 dark:text-amber-300 shadow-sm transition-all"
+                          >
+                            Orange (Échec) : 243890000002
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
                 </div>
               )}
             </div>

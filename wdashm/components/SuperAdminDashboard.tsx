@@ -1,16 +1,16 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Users, Store, ShoppingBag, DollarSign, Activity, 
   Search, CheckCircle, XCircle, LogOut, Shield, 
   Trash2, AlertTriangle, Database, Type, Sun, Moon, Menu, X, Bell,
   Eye, EyeOff, Download, FileText, Mail, MessageSquare, MessageCircle,
   Settings, UserPlus, UserMinus, ShieldCheck, ShieldAlert, RefreshCw, Bike,
-  CreditCard, Calendar
+  CreditCard, Calendar, Edit3
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import { APP_LOGO_URL, MOCK_RESTAURANTS } from '../constants';
+import { APP_LOGO_URL, MOCK_RESTAURANTS, CITIES_RDC } from '../constants';
 import { formatDualPrice } from '../utils/format';
-import { User, Restaurant, Order, Theme, Language, AppFont, AppSettings } from '../types';
+import { User, Restaurant, Order, Theme, Language, AppFont, AppSettings, BusinessType } from '../types';
 import { toast } from 'sonner';
 import { sendEmail, sendVerificationStatusEmail, sendSupportReplyEmail } from '../lib/email';
 import { useTranslation } from '../lib/i18n';
@@ -72,8 +72,8 @@ const getMockTickets = () => [
   {
     id: 'ticket-1',
     user_id: 'client-1',
-    subject: "Problème avec le paiement MoneyFusion",
-    message: "Bonjour, j'ai essayé de payer pour ma commande mais l'application a affiché une erreur de réseau au moment de valider le PIN MoneyFusion. Pourtant mon compte a été débité.",
+    subject: "Problème avec le paiement KPay",
+    message: "Bonjour, j'ai essayé de payer pour ma commande mais l'application a affiché une erreur de réseau au moment de valider le PIN KPay. Pourtant mon compte a été débité.",
     status: 'open',
     created_at: new Date(Date.now() - 3600000 * 2).toISOString(),
     profiles: {
@@ -181,13 +181,17 @@ interface Props {
   font?: AppFont;
   setFont?: (f: AppFont) => void;
   onGoToClient?: () => void;
+  onRefreshData?: () => void;
 }
 
 type AdminView = 'overview' | 'users' | 'restaurants' | 'publications' | 'verifications' | 'products' | 'support' | 'messages' | 'settings' | 'requests';
 
-export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, setTheme, language, setLanguage, font, setFont, onGoToClient }) => {
+export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, setTheme, language, setLanguage, font, setFont, onGoToClient, onRefreshData }) => {
   const t = useTranslation(language || 'fr');
-  const isPrincipalAdmin = user.email === 'irmerveilkanku@gmail.com';
+  const isPrincipalAdmin = user.role === 'superadmin' || user.email?.toLowerCase().trim() === 'irmerveilkanku@gmail.com';
+  const fetchStatsRequestId = useRef(0);
+  const fetchUsersRequestId = useRef(0);
+  const fetchRestaurantsRequestId = useRef(0);
   const [activeView, setActiveView] = useState<AdminView>('overview');
   const [stats, setStats] = useState({
     totalUsers: 0,
@@ -214,11 +218,119 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
   const [subscriptionModal, setSubscriptionModal] = useState<{ isOpen: boolean; restaurant: Restaurant | null }>({ isOpen: false, restaurant: null });
   const [selectedTier, setSelectedTier] = useState<string>('free');
   const [subEndDate, setSubEndDate] = useState<string>('');
+
+  const [editRestaurantModal, setEditRestaurantModal] = useState<{ isOpen: boolean; restaurant: Restaurant | null }>({ isOpen: false, restaurant: null });
+  const [editRestoForm, setEditRestoForm] = useState<{
+    id: string;
+    name: string;
+    type: BusinessType;
+    city: string;
+    description: string;
+    exchangeRate: number;
+    isVerified: boolean;
+    verificationStatus: string;
+    subscriptionTier: string;
+    subscriptionStatus: string;
+    subscriptionEndDate: string;
+    isActive: boolean;
+    isOpen: boolean;
+    preparationTime: number;
+    estimatedDeliveryTime: number;
+    deliveryAvailable: boolean;
+    displayCurrencyMode: 'dual' | 'usd' | 'cdf';
+  }>({
+    id: '',
+    name: '',
+    type: 'restaurant',
+    city: 'Kinshasa',
+    description: '',
+    exchangeRate: 2850,
+    isVerified: false,
+    verificationStatus: 'unverified',
+    subscriptionTier: 'free',
+    subscriptionStatus: 'active',
+    subscriptionEndDate: '',
+    isActive: true,
+    isOpen: true,
+    preparationTime: 20,
+    estimatedDeliveryTime: 30,
+    deliveryAvailable: true,
+    displayCurrencyMode: 'dual'
+  });
+
+  const handleOpenEditRestaurant = (r: Restaurant) => {
+    setEditRestoForm({
+      id: r.id,
+      name: r.name || '',
+      type: r.type || 'restaurant',
+      city: r.city || 'Kinshasa',
+      description: r.description || '',
+      exchangeRate: r.exchangeRate || 2850,
+      isVerified: r.isVerified || false,
+      verificationStatus: r.verificationStatus || 'unverified',
+      subscriptionTier: r.subscriptionTier || 'free',
+      subscriptionStatus: r.subscriptionStatus || 'active',
+      subscriptionEndDate: r.subscriptionEndDate ? r.subscriptionEndDate.split('T')[0] : '',
+      isActive: r.isActive !== false,
+      isOpen: r.isOpen !== false,
+      preparationTime: r.preparationTime || 20,
+      estimatedDeliveryTime: r.estimatedDeliveryTime || 30,
+      deliveryAvailable: r.deliveryAvailable !== false,
+      displayCurrencyMode: r.displayCurrencyMode || 'dual'
+    });
+    setEditRestaurantModal({ isOpen: true, restaurant: r });
+  };
+
+  const handleSaveRestaurantDetails = async () => {
+    if (!isPrincipalAdmin) {
+      toast.error("Action non autorisée. Seul l'administrateur principal est habilité à modifier les établissements.");
+      return;
+    }
+    if (!editRestoForm.id) return;
+    setLoading(true);
+    try {
+      const { error } = await supabase
+        .from('restaurants')
+        .update({
+          name: editRestoForm.name,
+          type: editRestoForm.type,
+          city: editRestoForm.city,
+          description: editRestoForm.description,
+          exchange_rate: Number(editRestoForm.exchangeRate) || 2850,
+          is_verified: editRestoForm.isVerified,
+          verification_status: editRestoForm.verificationStatus,
+          subscription_tier: editRestoForm.subscriptionTier,
+          subscription_status: editRestoForm.subscriptionStatus,
+          subscription_end_date: editRestoForm.subscriptionEndDate || null,
+          is_active: editRestoForm.isActive,
+          is_open: editRestoForm.isOpen,
+          preparation_time: Number(editRestoForm.preparationTime) || 20,
+          estimated_delivery_time: Number(editRestoForm.estimatedDeliveryTime) || 30,
+          delivery_available: editRestoForm.deliveryAvailable,
+          display_currency_mode: editRestoForm.displayCurrencyMode
+        })
+        .eq('id', editRestoForm.id);
+
+      if (error) throw error;
+
+      toast.success(`Informations de "${editRestoForm.name}" enregistrées avec succès !`);
+      setEditRestaurantModal({ isOpen: false, restaurant: null });
+      fetchRestaurants();
+      fetchStats();
+      if (onRefreshData) onRefreshData();
+    } catch (err: any) {
+      console.error("Error updating restaurant details:", err);
+      toast.error("Erreur de sauvegarde : " + (err.message || "Vérifiez vos permissions."));
+    } finally {
+      setLoading(false);
+    }
+  };
   const [appSettings, setAppSettings] = useState<AppSettings>({
     support_email: '',
     support_phone: '',
     support_whatsapp: '',
-    office_address: ''
+    office_address: '',
+    payment_exchange_rate: 2850
   });
 
   const [isAddUserModalOpen, setIsAddUserModalOpen] = useState(false);
@@ -416,15 +528,21 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
   const fetchAppSettings = async () => {
     setLoading(true);
     try {
-      const { data, error } = await supabase
+      const { data } = await supabase
         .from('app_settings')
         .select('value')
         .eq('id', 'global')
         .single();
       
-      if (error) throw error;
       if (data?.value) {
-        setAppSettings(data.value as AppSettings);
+        const raw = typeof data.value === 'string' ? JSON.parse(data.value) : data.value;
+        setAppSettings({
+          support_email: raw.support_email || '',
+          support_phone: raw.support_phone || '',
+          support_whatsapp: raw.support_whatsapp || '',
+          office_address: raw.office_address || '',
+          payment_exchange_rate: raw.payment_exchange_rate || 2850
+        });
       }
     } catch (error) {
       console.error("Error fetching settings:", error);
@@ -439,7 +557,14 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
       .channel('admin:app_settings')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'app_settings', filter: 'id=eq.global' }, (payload) => {
         if (payload.new && (payload.new as any).value) {
-          setAppSettings((payload.new as any).value);
+          const raw = typeof (payload.new as any).value === 'string' ? JSON.parse((payload.new as any).value) : (payload.new as any).value;
+          setAppSettings({
+            support_email: raw.support_email || '',
+            support_phone: raw.support_phone || '',
+            support_whatsapp: raw.support_whatsapp || '',
+            office_address: raw.office_address || '',
+            payment_exchange_rate: raw.payment_exchange_rate || 2850
+          });
         }
       })
       .subscribe();
@@ -456,16 +581,45 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
     }
     setLoading(true);
     try {
+      const cleanSettings = {
+        support_email: appSettings.support_email ? appSettings.support_email.trim() : 'support@dashmeals-rdc.com',
+        support_phone: appSettings.support_phone ? appSettings.support_phone.trim() : '+243 81 000 0000',
+        support_whatsapp: appSettings.support_whatsapp ? appSettings.support_whatsapp.trim() : '+243 81 000 0001',
+        office_address: appSettings.office_address ? appSettings.office_address.trim() : 'Boulevard du 30 Juin, Gombe, Kinshasa, RDC.',
+        payment_exchange_rate: Number(appSettings.payment_exchange_rate) || 2850
+      };
+
+      let savedOk = false;
+
+      // 1. First try updating via the backend API endpoint (bypasses client-side RLS using service role key)
+      try {
+        const res = await fetch('/api/admin/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(cleanSettings)
+        });
+        if (res.ok) {
+          savedOk = true;
+        }
+      } catch (apiErr) {
+        console.warn("API settings update endpoint unavailable, trying direct Supabase upsert...", apiErr);
+      }
+
+      // 2. Also run client-side Supabase upsert to ensure Realtime listeners fire instantly
       const { error } = await supabase
         .from('app_settings')
-        .update({ value: appSettings })
-        .eq('id', 'global');
+        .upsert({ id: 'global', value: cleanSettings, updated_at: new Date().toISOString() });
       
-      if (error) throw error;
-      toast.success("Paramètres mis à jour avec succès !");
+      if (!savedOk && error) {
+        throw error;
+      }
+      
+      setAppSettings(cleanSettings);
+      toast.success("Paramètres généraux mis à jour avec succès !");
+      if (onRefreshData) onRefreshData();
     } catch (error: any) {
       console.error("Error updating settings:", error);
-      toast.error("Erreur : " + error.message);
+      toast.error("Erreur : " + (error.message || "Impossible de sauvegarder la configuration"));
     }
     setLoading(false);
   };
@@ -476,6 +630,7 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
   };
 
   const fetchStats = async () => {
+    const requestId = ++fetchStatsRequestId.current;
     try {
       let userCount = 0;
       let restoCount = 0;
@@ -521,6 +676,8 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
       if (ticketCount === 0) ticketCount = getMockTickets().length;
       if (subCount === 0) subCount = 1;
 
+      if (requestId !== fetchStatsRequestId.current) return;
+
       setStats({
         totalUsers: userCount,
         totalRestaurants: restoCount,
@@ -531,30 +688,38 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
         subscriptionRequests: subCount
       });
     } catch (error) {
+      if (requestId !== fetchStatsRequestId.current) return;
       console.error("Error fetching stats:", error);
     }
   };
 
   const fetchUsers = async () => {
+    const requestId = ++fetchUsersRequestId.current;
     setLoading(true);
     try {
       const { data, error } = await supabase.from('profiles').select('*').order('created_at', { ascending: false });
       if (error) throw error;
+      if (requestId !== fetchUsersRequestId.current) return;
       setUsers(data || []);
     } catch (error: any) {
+      if (requestId !== fetchUsersRequestId.current) return;
       console.error("Error fetching users:", error);
       setUsers([]);
     } finally {
-      setLoading(false);
+      if (requestId === fetchUsersRequestId.current) {
+        setLoading(false);
+      }
     }
   };
 
   const fetchRestaurants = async () => {
+    const requestId = ++fetchRestaurantsRequestId.current;
     setLoading(true);
     try {
       const { data, error } = await supabase.from('restaurants').select('*').order('created_at', { ascending: false });
       
       if (error) throw error;
+      if (requestId !== fetchRestaurantsRequestId.current) return;
       if (data && data.length > 0) {
         setRestaurants(data.map((r: any) => ({
             ...r,
@@ -576,10 +741,13 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
         setRestaurants([]);
       }
     } catch (error: any) {
+      if (requestId !== fetchRestaurantsRequestId.current) return;
       console.error("Error fetching restaurants:", error);
       setRestaurants([]);
     } finally {
-      setLoading(false);
+      if (requestId === fetchRestaurantsRequestId.current) {
+        setLoading(false);
+      }
     }
   };
 
@@ -981,6 +1149,7 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
       } else {
           toast.success("Statut mis à jour !");
           fetchPublications();
+          if (onRefreshData) onRefreshData();
       }
   };
 
@@ -1002,6 +1171,7 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
           }
           toast.success("Publication supprimée !");
           await fetchPublications();
+          if (onRefreshData) onRefreshData();
       } catch (error: any) {
           console.error("Delete publication error:", error);
           toast.error("Erreur lors de la suppression : " + (error.message || "Vérifiez vos permissions"));
@@ -1052,6 +1222,7 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
           fetchPendingVerifications();
           fetchRestaurants();
           fetchStats(); // Update counters
+          if (onRefreshData) onRefreshData();
       } catch (error: any) {
           console.error("Verification error:", error);
           toast.error("Erreur : " + (error.message || "Erreur inconnue"));
@@ -1093,6 +1264,7 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
           
           toast.success("Demande de vérification envoyée !");
           fetchRestaurants();
+          if (onRefreshData) onRefreshData();
       } catch (error: any) {
           console.error("Verification request error:", error);
           toast.error("Erreur : " + error.message);
@@ -1108,6 +1280,7 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
       } else {
           toast.success(`Restaurant ${!currentStatus ? 'affiché' : 'masqué'}`);
           fetchRestaurants();
+          if (onRefreshData) onRefreshData();
       }
   };
 
@@ -1128,6 +1301,7 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
           toast.success("Restaurant supprimé avec succès");
           await fetchRestaurants();
           await fetchStats();
+          if (onRefreshData) onRefreshData();
       } catch (error: any) {
           console.error("Delete restaurant catch error:", error);
           toast.error("Erreur lors de la suppression : " + (error.message || "Vérifiez les contraintes de base de données"));
@@ -1147,6 +1321,7 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
       } else {
           toast.success(`Utilisateur ${!currentStatus ? 'activé' : 'désactivé'}`);
           fetchUsers();
+          if (onRefreshData) onRefreshData();
       }
   };
 
@@ -1165,6 +1340,7 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
           toast.success(`Rôle changé avec succès en ${newRole}`);
           setRoleModal({ isOpen: false, userId: '', currentRole: '' });
           fetchUsers();
+          if (onRefreshData) onRefreshData();
       }
   };
 
@@ -1194,6 +1370,7 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
                   toast.success("Utilisateur supprimé avec succès");
                   await fetchUsers();
                   await fetchStats();
+                  if (onRefreshData) onRefreshData();
                   setConfirmModal({ isOpen: false, title: '', message: '', onConfirm: () => {} });
               } catch (error: any) {
                   console.error("Delete user error:", error);
@@ -1223,8 +1400,78 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
         
         if (error) throw error;
         toast.success("Abonnement mis à jour !");
+
+        // Send email to the restaurant owner notifying them of the subscription update
+        try {
+          const { data: ownerProfile } = await supabase
+            .from('profiles')
+            .select('email, full_name')
+            .eq('id', subscriptionModal.restaurant.ownerId)
+            .single();
+
+          if (ownerProfile?.email) {
+            const planNames: Record<string, string> = {
+              free: "Gratuit",
+              premium: "Premium Pro",
+              business: "Business Max",
+              enterprise: "Entreprise"
+            };
+            const planName = planNames[selectedTier] || selectedTier.toUpperCase();
+            const endDateFormatted = subEndDate 
+              ? new Date(subEndDate).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }) 
+              : 'Non définie';
+
+            await sendEmail({
+              to: ownerProfile.email,
+              subject: `[DashMeals] Mise à jour de votre abonnement - ${subscriptionModal.restaurant.name}`,
+              html: `
+                <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e5e7eb; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+                  <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); padding: 30px; text-align: center; color: white;">
+                    <h1 style="margin: 0; font-size: 24px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px;">Abonnement Mis à Jour ⚡</h1>
+                    <p style="margin: 10px 0 0 0; font-size: 14px; opacity: 0.9;">Votre restaurant ${subscriptionModal.restaurant.name} a été mis à jour par l'administration.</p>
+                  </div>
+                  <div style="padding: 30px; color: #1f2937; line-height: 1.6;">
+                    <p style="font-size: 16px; margin-top: 0;">Bonjour <strong>${ownerProfile.full_name || "Partenaire"}</strong>,</p>
+                    <p>Nous vous informons qu'un administrateur a mis à jour le statut d'abonnement de votre restaurant <strong>${subscriptionModal.restaurant.name}</strong>.</p>
+                    
+                    <div style="background-color: #f9fafb; border: 1px solid #e5e7eb; padding: 20px; border-radius: 12px; margin: 25px 0;">
+                      <h3 style="margin-top: 0; color: #10b981; font-size: 15px; border-bottom: 1px solid #e5e7eb; padding-bottom: 8px; text-transform: uppercase;">Détails de l'Abonnement</h3>
+                      <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+                        <tr>
+                          <td style="padding: 6px 0; color: #4b5563; font-weight: 500;">Établissement :</td>
+                          <td style="padding: 6px 0; text-align: right; font-weight: bold; color: #111827;">${subscriptionModal.restaurant.name}</td>
+                        </tr>
+                        <tr>
+                          <td style="padding: 6px 0; color: #4b5563; font-weight: 500;">Forfait :</td>
+                          <td style="padding: 6px 0; text-align: right; font-weight: bold; color: #10b981;">${planName}</td>
+                        </tr>
+                        <tr>
+                          <td style="padding: 6px 0; color: #4b5563; font-weight: 500;">Statut :</td>
+                          <td style="padding: 6px 0; text-align: right; font-weight: bold; color: #10b981;">Actif ✅</td>
+                        </tr>
+                        <tr>
+                          <td style="padding: 6px 0; color: #4b5563; font-weight: 500;">Date d'expiration :</td>
+                          <td style="padding: 6px 0; text-align: right; font-weight: bold; color: #111827;">${endDateFormatted}</td>
+                        </tr>
+                      </table>
+                    </div>
+                    
+                    <p>Si vous avez des questions, notre support est à votre entière disposition.</p>
+                    
+                    <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 25px 0;" />
+                    <p style="font-size: 12px; color: #6b7280; text-align: center; margin-bottom: 0;">L'équipe DashMeals Admin.</p>
+                  </div>
+                </div>
+              `
+            });
+          }
+        } catch (emailErr) {
+          console.error("Error sending subscription update email:", emailErr);
+        }
+
         setSubscriptionModal({ isOpen: false, restaurant: null });
         fetchRestaurants();
+        if (onRefreshData) onRefreshData();
     } catch (error: any) {
         toast.error("Erreur : " + error.message);
     }
@@ -2240,9 +2487,15 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
                                         <CreditCard size={18} />
                                     </button>
                                 )}
-                                <button className="p-2 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
-                                    <Eye size={18} />
-                                </button>
+                                {isPrincipalAdmin && (
+                                    <button 
+                                        onClick={() => handleOpenEditRestaurant(r)}
+                                        className="p-2 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+                                        title="Modifier l'établissement"
+                                    >
+                                        <Edit3 size={18} />
+                                    </button>
+                                )}
                                 <button 
                                     onClick={() => toggleRestaurantStatus(r.id, r.isActive)}
                                     className={`p-2 rounded-lg transition-all ${r.isActive ? 'text-gray-400 hover:text-orange-500' : 'text-orange-600 bg-orange-50'}`}
@@ -2363,8 +2616,8 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
       <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-[#0d1527] dark:bg-[#070b13] border-r border-[#1e293b]/70 dark:border-slate-900/40 text-gray-200 flex flex-col transition-transform duration-300 ease-in-out md:translate-x-0 ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'} overflow-y-auto shadow-2xl`}>
         <div className="p-6 border-b border-[#1e293b]/60 flex justify-between items-center">
             <div className="flex items-center space-x-3">
-                <div className="bg-white p-1.5 rounded-xl shadow-md ring-2 ring-brand-500/10">
-                    <img src={APP_LOGO_URL} alt="DashMeals" className="h-7 w-auto object-contain" />
+                <div className="bg-brand-500 rounded-[14px] shadow-md ring-2 ring-brand-500/20 flex items-center justify-center overflow-hidden w-8 h-8">
+                    <img src={APP_LOGO_URL} alt="DashMeals" className="w-full h-full object-cover" />
                 </div>
                 <div>
                     <h1 className="text-lg font-black tracking-tighter text-white uppercase leading-none">DashMeals</h1>
@@ -2790,6 +3043,17 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
                       placeholder="Kinshasa, Gombe" style={{ opacity: isPrincipalAdmin ? 1 : 0.6 }}
                     />
                   </div>
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Taux de Conversion de Paiement (1 USD = ? CDF)</label>
+                    <input 
+                      type="number"
+                      value={appSettings.payment_exchange_rate || 2850} disabled={!isPrincipalAdmin}
+                      onChange={(e) => setAppSettings({...appSettings, payment_exchange_rate: Number(e.target.value) || 2850})}
+                      className="w-full p-4 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-xl text-sm focus:ring-2 focus:ring-brand-500 outline-none dark:text-white font-mono font-bold text-brand-600 dark:text-brand-400"
+                      placeholder="2850" style={{ opacity: isPrincipalAdmin ? 1 : 0.6 }}
+                    />
+                    <p className="text-[10px] text-gray-400 mt-1">Configure le taux de change global de l'application appliqué lors du paiement KPay (conversion automatique des dollars USD en francs congolais CDF).</p>
+                  </div>
                 </div>
                 <div className="flex justify-end pt-4">
                   <button 
@@ -2889,11 +3153,9 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
                                       onChange={(e) => setNewUserData({...newUserData, city: e.target.value})}
                                       className="w-full p-3 bg-gray-50 dark:bg-gray-700 border border-gray-100 dark:border-gray-650 rounded-xl text-sm focus:ring-2 focus:ring-brand-500 outline-none dark:text-white font-semibold"
                                   >
-                                      <option value="Kinshasa">Kinshasa</option>
-                                      <option value="Goma">Goma</option>
-                                      <option value="Lubumbashi">Lubumbashi</option>
-                                      <option value="Kisangani">Kisangani</option>
-                                      <option value="Bukavu">Bukavu</option>
+                                      {CITIES_RDC.map(city => (
+                                          <option key={city} value={city}>{city}</option>
+                                      ))}
                                   </select>
                               </div>
                           </div>
@@ -2978,6 +3240,195 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
                                   Enregistrer
                               </button>
                           </div>
+                      </div>
+                  </div>
+              </div>
+          )}
+
+          {/* Edit Restaurant Modal */}
+          {editRestaurantModal.isOpen && editRestaurantModal.restaurant && isPrincipalAdmin && (
+              <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4 overflow-y-auto">
+                  <div className="bg-white dark:bg-gray-800 w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden my-8 animate-in zoom-in-95 duration-200">
+                      <div className="p-6 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-900/50">
+                          <div>
+                              <h3 className="font-black text-gray-900 dark:text-white text-lg flex items-center gap-2">
+                                  <Store size={20} className="text-brand-600" /> Modifier l'Établissement
+                              </h3>
+                              <p className="text-xs text-gray-500 dark:text-gray-400">{editRestoForm.name}</p>
+                          </div>
+                          <button 
+                              onClick={() => setEditRestaurantModal({ isOpen: false, restaurant: null })} 
+                              className="p-2 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-full text-gray-500 transition-colors"
+                          >
+                              <X size={20} />
+                          </button>
+                      </div>
+
+                      <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              <div>
+                                  <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1">Nom de l'établissement</label>
+                                  <input 
+                                      type="text" 
+                                      value={editRestoForm.name} 
+                                      onChange={e => setEditRestoForm({ ...editRestoForm, name: e.target.value })}
+                                      className="w-full px-4 py-2.5 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-xl text-sm dark:text-white outline-none focus:ring-2 focus:ring-brand-500"
+                                  />
+                              </div>
+                              <div>
+                                  <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1">Catégorie / Type</label>
+                                  <select 
+                                      value={editRestoForm.type} 
+                                      onChange={e => setEditRestoForm({ ...editRestoForm, type: e.target.value as BusinessType })}
+                                      className="w-full px-4 py-2.5 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-xl text-sm dark:text-white outline-none focus:ring-2 focus:ring-brand-500"
+                                  >
+                                      <option value="restaurant">Restaurant</option>
+                                      <option value="fast_food">Fast Food</option>
+                                      <option value="bakery">Boulangerie / Pâtisserie</option>
+                                      <option value="grocery">Épicerie / Supermarché</option>
+                                      <option value="pharmacy">Pharmacie</option>
+                                  </select>
+                              </div>
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              <div>
+                                  <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1">Ville</label>
+                                  <select 
+                                      value={editRestoForm.city} 
+                                      onChange={e => setEditRestoForm({ ...editRestoForm, city: e.target.value })}
+                                      className="w-full px-4 py-2.5 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-xl text-sm dark:text-white outline-none focus:ring-2 focus:ring-brand-500"
+                                  >
+                                      {CITIES_RDC.map(c => (
+                                          <option key={c} value={c}>{c}</option>
+                                      ))}
+                                  </select>
+                              </div>
+                              <div>
+                                  <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1">Taux de conversion (1 USD = X CDF)</label>
+                                  <input 
+                                      type="number" 
+                                      value={editRestoForm.exchangeRate} 
+                                      onChange={e => setEditRestoForm({ ...editRestoForm, exchangeRate: Number(e.target.value) || 2850 })}
+                                      className="w-full px-4 py-2.5 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-xl text-sm dark:text-white outline-none focus:ring-2 focus:ring-brand-500 font-bold"
+                                  />
+                              </div>
+                          </div>
+
+                          <div>
+                              <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1">Description</label>
+                              <textarea 
+                                  rows={2}
+                                  value={editRestoForm.description} 
+                                  onChange={e => setEditRestoForm({ ...editRestoForm, description: e.target.value })}
+                                  className="w-full px-4 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-xl text-sm dark:text-white outline-none focus:ring-2 focus:ring-brand-500 resize-none"
+                              />
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              <div>
+                                  <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1">Mode d'affichage des prix</label>
+                                  <select 
+                                      value={editRestoForm.displayCurrencyMode} 
+                                      onChange={e => setEditRestoForm({ ...editRestoForm, displayCurrencyMode: e.target.value as any })}
+                                      className="w-full px-4 py-2.5 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-xl text-sm dark:text-white outline-none focus:ring-2 focus:ring-brand-500"
+                                  >
+                                      <option value="dual">Double Affichage (USD + CDF)</option>
+                                      <option value="usd">USD Uniquement ($)</option>
+                                      <option value="cdf">CDF Uniquement (FC)</option>
+                                  </select>
+                              </div>
+                              <div>
+                                  <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1">Forfait d'Abonnement</label>
+                                  <select 
+                                      value={editRestoForm.subscriptionTier} 
+                                      onChange={e => setEditRestoForm({ ...editRestoForm, subscriptionTier: e.target.value as any })}
+                                      className="w-full px-4 py-2.5 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-xl text-sm dark:text-white outline-none focus:ring-2 focus:ring-brand-500 font-bold"
+                                  >
+                                      <option value="free">Gratuit (Free)</option>
+                                      <option value="basic">Basic Pro</option>
+                                      <option value="premium">Premium Pro</option>
+                                      <option value="enterprise">Entreprise Max</option>
+                                  </select>
+                              </div>
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              <div>
+                                  <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1">Statut de Vérification</label>
+                                  <select 
+                                      value={editRestoForm.verificationStatus} 
+                                      onChange={e => setEditRestoForm({ 
+                                          ...editRestoForm, 
+                                          verificationStatus: e.target.value as any,
+                                          isVerified: e.target.value === 'verified'
+                                      })}
+                                      className="w-full px-4 py-2.5 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-xl text-sm dark:text-white outline-none focus:ring-2 focus:ring-brand-500"
+                                  >
+                                      <option value="unverified">Non Vérifié</option>
+                                      <option value="pending">En attente de validation</option>
+                                      <option value="verified">Vérifié (Badge de confiance)</option>
+                                  </select>
+                              </div>
+                              <div>
+                                  <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1">Temps de Préparation Moy. (min)</label>
+                                  <input 
+                                      type="number" 
+                                      value={editRestoForm.preparationTime} 
+                                      onChange={e => setEditRestoForm({ ...editRestoForm, preparationTime: Number(e.target.value) || 20 })}
+                                      className="w-full px-4 py-2.5 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-xl text-sm dark:text-white outline-none focus:ring-2 focus:ring-brand-500"
+                                  />
+                              </div>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+                              <label className="flex items-center gap-2 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-xl cursor-pointer">
+                                  <input 
+                                      type="checkbox" 
+                                      checked={editRestoForm.isActive} 
+                                      onChange={e => setEditRestoForm({ ...editRestoForm, isActive: e.target.checked })}
+                                      className="w-4 h-4 text-brand-600 rounded accent-brand-600"
+                                  />
+                                  <span className="text-xs font-bold dark:text-white">Actif</span>
+                              </label>
+
+                              <label className="flex items-center gap-2 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-xl cursor-pointer">
+                                  <input 
+                                      type="checkbox" 
+                                      checked={editRestoForm.isOpen} 
+                                      onChange={e => setEditRestoForm({ ...editRestoForm, isOpen: e.target.checked })}
+                                      className="w-4 h-4 text-brand-600 rounded accent-brand-600"
+                                  />
+                                  <span className="text-xs font-bold dark:text-white">Ouvert</span>
+                              </label>
+
+                              <label className="flex items-center gap-2 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-xl cursor-pointer">
+                                  <input 
+                                      type="checkbox" 
+                                      checked={editRestoForm.deliveryAvailable} 
+                                      onChange={e => setEditRestoForm({ ...editRestoForm, deliveryAvailable: e.target.checked })}
+                                      className="w-4 h-4 text-brand-600 rounded accent-brand-600"
+                                  />
+                                  <span className="text-xs font-bold dark:text-white">Livraison Dispo.</span>
+                              </label>
+                          </div>
+                      </div>
+
+                      <div className="p-6 bg-gray-50 dark:bg-gray-900/50 border-t border-gray-100 dark:border-gray-700 flex gap-3">
+                          <button 
+                              onClick={() => setEditRestaurantModal({ isOpen: false, restaurant: null })}
+                              className="flex-1 py-3 text-gray-500 dark:text-gray-400 font-bold hover:bg-gray-200 dark:hover:bg-gray-700 rounded-xl transition-all"
+                          >
+                              Annuler
+                          </button>
+                          <button 
+                              onClick={handleSaveRestaurantDetails}
+                              disabled={loading}
+                              className="flex-1 py-3 bg-brand-600 hover:bg-brand-700 text-white rounded-xl font-bold shadow-lg shadow-brand-500/20 transition-all flex items-center justify-center gap-2"
+                          >
+                              {loading && <RefreshCw size={16} className="animate-spin" />}
+                              Enregistrer
+                          </button>
                       </div>
                   </div>
               </div>
