@@ -1,5 +1,6 @@
 {
   "dependencies": {
-    "cors": "^2.8.6"
+    "cors": "^2.8.6",
+    "react-is": "^19.2.8"
   }
 }
