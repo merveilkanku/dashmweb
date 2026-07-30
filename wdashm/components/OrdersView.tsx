@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Receipt, ShoppingBag, Phone, MessageSquare, CheckCircle2, Circle, Bike, ChefHat, Clock, Camera, Star, X, Banknote, Smartphone, Zap, AlertCircle, MapPin, Navigation, ChevronRight, CreditCard } from 'lucide-react';
+import { Receipt, ShoppingBag, Phone, MessageSquare, CheckCircle2, Circle, Bike, ChefHat, Clock, Camera, Star, X, Banknote, Smartphone, Zap, AlertCircle, MapPin, Navigation, ChevronRight, CreditCard, FileText } from 'lucide-react';
 import { toast } from 'sonner';
 import { Order, OrderStatus, Restaurant } from '../types';
 import { formatDualPrice } from '../utils/format';
@@ -8,6 +8,7 @@ import { supabase } from '../lib/supabase';
 import { DeliveryTrackingMap } from './DeliveryTrackingMap';
 import { LiveDeliveryMap } from './LiveDeliveryMap';
 import { isUserOnline, formatLastSeen } from '../utils/presence';
+import { downloadOrderInvoicePDF } from '../utils/invoiceGenerator';
 
 interface Props {
   orders: Order[];
@@ -449,12 +450,22 @@ export const OrdersView: React.FC<Props> = ({ orders, onChat, onLivreurChat, onB
                                     </div>
                                     <p className="text-xs text-gray-400">Commande #{order.id.slice(0,6)} • {new Date(order.createdAt).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'})}</p>
                                 </div>
-                                <span className={`text-[10px] font-bold px-2 py-1 rounded-full uppercase tracking-wide ${getStatusColor(order.status)}`}>{getStatusLabel(order.status)}</span>
+                                <div className="flex items-center space-x-2">
+                                    <button 
+                                        onClick={() => downloadOrderInvoicePDF(order, order.restaurant)} 
+                                        title="Télécharger la facture PDF"
+                                        className="flex items-center space-x-1 px-2.5 py-1 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-[10px] font-bold transition-all shadow-xs active:scale-95"
+                                    >
+                                        <FileText size={12} />
+                                        <span>Facture PDF</span>
+                                    </button>
+                                    <span className={`text-[10px] font-bold px-2 py-1 rounded-full uppercase tracking-wide ${getStatusColor(order.status)}`}>{getStatusLabel(order.status)}</span>
+                                </div>
                             </div>
                             <div className="flex items-center space-x-2 mt-2">
                                 <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-gray-100 text-gray-600 flex items-center">
                                     {order.paymentMethod === 'cash' ? <Banknote size={10} className="mr-1"/> : (order.paymentMethod === 'kpay' || order.paymentMethod === 'money_fusion') ? <CreditCard size={10} className="mr-1"/> : <Smartphone size={10} className="mr-1"/>}
-                                    {order.paymentMethod === 'cash' ? 'Cash' : order.paymentMethod === 'kpay' ? 'KPay' : order.paymentMethod === 'money_fusion' ? 'Money Fusion' : `Mobile Money (${order.paymentNetwork?.toUpperCase()})`}
+                                    {order.paymentMethod === 'cash' ? 'Cash' : order.paymentMethod === 'kpay' ? 'DashMeals Pay' : order.paymentMethod === 'money_fusion' ? 'Money Fusion' : `Mobile Money (${order.paymentNetwork?.toUpperCase()})`}
                                 </span>
                                 <span className={`text-[10px] font-bold px-2 py-0.5 rounded flex items-center ${order.paymentStatus === 'paid' ? 'bg-green-100 text-green-700' : order.paymentStatus === 'failed' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'}`}>
                                     {order.paymentStatus === 'paid' ? 'Payé' : order.paymentStatus === 'failed' ? 'Preuve refusée' : 'En attente de paiement'}
@@ -847,7 +858,10 @@ export const OrdersView: React.FC<Props> = ({ orders, onChat, onLivreurChat, onB
                                         ) : (
                                             <>
                                                 <button 
-                                                    onClick={() => window.open(`tel:${order.restaurant?.phone_number || '+243999999999'}`)} 
+                                                    onClick={() => {
+                                                      const phone = order.restaurant?.phone_number || (order.restaurant as any)?.phoneNumber || '+243812345678';
+                                                      window.open(`tel:${phone.replace(/\s+/g, '')}`);
+                                                    }} 
                                                     className="flex items-center justify-center py-3 bg-white border border-gray-200 text-gray-700 rounded-xl text-xs font-bold hover:bg-gray-50 transition-colors"
                                                 >
                                                     <Phone size={16} className="mr-2" /> Appeler

@@ -1,26 +1,21 @@
+import { parseJsonResponse } from '../utils/fetch';
+
 // AI Services for DashMeals
-// Client-side calls are routed through our secure server proxy at /api/gemini 
-// to avoid exposing our GEMINI_API_KEY to the client bundle.
+// Client-side requests are securely routed through our backend proxy at /api/gemini.
 
 // 1. Assistant Vocal Multi-Rôles
 export const processVoiceCommand = async (command: string, role: "business" | "delivery" | "user" = "delivery") => {
   try {
     const response = await fetch('/api/gemini', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         action: 'processVoiceCommand',
         payload: { command, role }
       })
     });
 
-    if (!response.ok) {
-      throw new Error(`Server returned ${response.status}`);
-    }
-
-    return await response.json();
+    return await parseJsonResponse(response);
   } catch (e) {
     console.error("AI Error:", e);
     return { action: "unknown" };
@@ -32,24 +27,18 @@ export const getSmartSupportResponse = async (userMessage: string, context: any)
   try {
     const response = await fetch('/api/gemini', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         action: 'getSmartSupportResponse',
         payload: { userMessage, context }
       })
     });
 
-    if (!response.ok) {
-      throw new Error(`Server returned ${response.status}`);
-    }
-
-    const data = await response.json();
-    return data.text || "Désolé, je ne peux pas répondre pour le moment.";
+    const data = await parseJsonResponse(response);
+    return data.text || "Désolé, je ne peux pas répondre pour le moment. Notre support reste joignable au +243 842 578 529.";
   } catch (e) {
     console.error("AI Error:", e);
-    return "Le service de support est temporairement indisponible.";
+    return "Le service d'assistance IA est temporairement indisponible. Notre équipe reste joignable au +243 842 578 529 ou par email à support@dashmeals-rdc.com.";
   }
 };
 
@@ -58,22 +47,17 @@ export const getBusinessInsights = async (orderHistory: any[]) => {
   try {
     const response = await fetch('/api/gemini', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         action: 'getBusinessInsights',
         payload: { orderHistory }
       })
     });
 
-    if (!response.ok) {
-      throw new Error(`Server returned ${response.status}`);
-    }
-
-    return await response.json();
+    return await parseJsonResponse(response);
   } catch (e) {
     console.error("AI Error:", e);
     return null;
   }
 };
+

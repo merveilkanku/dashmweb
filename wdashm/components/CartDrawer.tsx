@@ -127,7 +127,7 @@ export const CartDrawer: React.FC<Props> = ({
         return;
       }
       if (selectedMethod === 'kpay' && !kpayPhone) {
-        toast.error("Veuillez saisir votre numéro Mobile Money pour KPay.");
+        toast.error("Veuillez saisir votre numéro Mobile Money.");
         return;
       }
 
@@ -361,10 +361,13 @@ export const CartDrawer: React.FC<Props> = ({
                       {restaurantDetails.address && (
                         <p className="text-xs text-gray-500 leading-normal">{restaurantDetails.address}</p>
                       )}
-                      {restaurantDetails.phone_number && (
-                        <p className="text-xs font-mono text-brand-600 font-bold flex items-center pt-1">
-                          📞 {restaurantDetails.phone_number}
-                        </p>
+                      {(restaurantDetails.phoneNumber || restaurantDetails.phone_number) && (
+                        <a 
+                          href={`tel:${(restaurantDetails.phoneNumber || restaurantDetails.phone_number || '+243812345678').replace(/\s+/g, '')}`}
+                          className="text-xs font-mono text-emerald-600 font-bold flex items-center pt-1 hover:underline"
+                        >
+                          📞 {restaurantDetails.phoneNumber || restaurantDetails.phone_number}
+                        </a>
                       )}
                     </div>
                   ) : (
@@ -446,8 +449,8 @@ export const CartDrawer: React.FC<Props> = ({
                       <CreditCard size={24} />
                     </div>
                     <div className="text-left flex-1">
-                      <p className="font-bold text-gray-900">KPay</p>
-                      <p className="text-xs text-gray-500 mt-0.5">Paiement sécurisé via KPay</p>
+                      <p className="font-bold text-gray-900">Mobile Money Direct</p>
+                      <p className="text-xs text-gray-500 mt-0.5">Paiement mobile instantané (M-Pesa, Airtel, Orange)</p>
                     </div>
                     <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center ${selectedMethod === 'kpay' ? 'border-brand-500 bg-brand-500' : 'border-gray-300'}`}>
                       {selectedMethod === 'kpay' && <CheckCircle2 className="text-white" size={16} />}
@@ -582,7 +585,7 @@ export const CartDrawer: React.FC<Props> = ({
 
               {selectedMethod === 'kpay' && (
                 <div className="animate-in fade-in slide-in-from-top-4 duration-300 bg-gray-50 p-4 rounded-2xl border border-gray-200 space-y-4">
-                  <p className="text-xs font-bold text-gray-500 uppercase tracking-wider">Sélectionnez votre réseau pour KPay USSD</p>
+                  <p className="text-xs font-bold text-gray-500 uppercase tracking-wider">Sélectionnez votre réseau Mobile Money</p>
                   <div className="grid grid-cols-3 gap-3">
                     <button 
                       type="button"

@@ -473,9 +473,27 @@ function App() {
             fetchUserProfile(session.user.id, session.user.email!, session.user.user_metadata);
           }
         } else {
-          // Fallback local instantané (staff ou hors-ligne de secours)
+          // Fallback local instantané (staff, sub-admin ou hors-ligne de secours)
+          const subAdminSession = localStorage.getItem('dashmeals_subadmin_session');
           const staffSession = localStorage.getItem('dashmeals_staff_session');
-          if (staffSession) {
+          if (subAdminSession) {
+            console.log("📂 [Auth] Session locale (sous-admin) trouvée");
+            const sa = JSON.parse(subAdminSession);
+            const user: User = {
+              id: sa.id || `sub-${Date.now()}`,
+              name: sa.full_name,
+              email: sa.email,
+              role: 'superadmin',
+              city: 'Kinshasa',
+              phoneNumber: sa.phone_number || '',
+              simulatedSubAdmin: sa
+            };
+            if (!currentUserRef.current) {
+              setCurrentUser(user);
+              lastFetchedUserId.current = user.id;
+              setShowAuth(false);
+            }
+          } else if (staffSession) {
             console.log("📂 [Auth] Session locale (staff) trouvée");
             const user = JSON.parse(staffSession);
             if (!currentUserRef.current) {
@@ -1037,7 +1055,7 @@ function App() {
           .from('restaurants')
           .select(`
             id, owner_id, type, name, description, latitude, longitude, 
-            city, is_open, is_active, rating, review_count, 
+            city, phone_number, is_open, is_active, rating, review_count, 
             preparation_time, estimated_delivery_time, delivery_available, 
             cover_image, currency, exchange_rate, display_currency_mode,
             is_verified, verification_status, verification_requested,
@@ -1123,10 +1141,9 @@ function App() {
           latitude: Number(r.latitude) || KINSHASA_CENTER_LAT,
           longitude: Number(r.longitude) || KINSHASA_CENTER_LNG,
           city: r.city || 'Kinshasa',
+          phoneNumber: r.phone_number || r.phoneNumber || r.phone || '+243812345678',
           isOpen: r.is_open === true,
-          isOnline: (r.is_online === true || r.is_online === false) 
-                      ? r.is_online 
-                      : (r.settings?.isOnline !== false),
+          isOnline: (r.is_online === false || r.settings?.isOnline === false) ? false : true,
           isActive: r.is_active !== false,
           rating: r.rating,
           reviewCount: r.review_count,
@@ -1444,6 +1461,7 @@ function App() {
        localStorage.removeItem(`dashmeals_role_${currentUser.id}`);
     }
     localStorage.removeItem('dashmeals_staff_session');
+    localStorage.removeItem('dashmeals_subadmin_session');
     
     // 2. Clear all local Supabase keys and sessions to force client-side de-authentication immediately
     try {

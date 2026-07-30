@@ -127,6 +127,7 @@ export interface User {
   businessId?: string; // Si c'est un compte business ou staff
   deliveryApplicationStatus?: 'none' | 'pending' | 'approved' | 'rejected'; // Statut de la demande pour devenir livreur
   staffRole?: 'admin' | 'manager' | 'cook' | 'delivery';
+  simulatedSubAdmin?: any;
   settings?: SecuritySettings;
   avatarUrl?: string; // URL de la photo de profil
   deliveryInfo?: {

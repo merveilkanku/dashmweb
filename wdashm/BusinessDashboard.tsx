@@ -14,12 +14,14 @@ import {
   AppFont,
   RestaurantPaymentConfig,
   AppSettings,
+  MealReview,
 } from "./types";
 import { getBusinessInsights, getSmartSupportResponse } from "./lib/gemini";
 import { LiveDeliveryMap } from "./components/LiveDeliveryMap";
 import { RestaurantCodeValidator } from "./components/RestaurantCodeValidator";
 import {
   Plus,
+  Utensils,
   Trash2,
   Power,
   LogOut,
@@ -706,6 +708,8 @@ export const BusinessDashboard: React.FC<Props> = ({
   const [selectedMarketplaceProduct, setSelectedMarketplaceProduct] =
     useState<any>(null);
   const [isMarketplaceModalOpen, setIsMarketplaceModalOpen] = useState(false);
+  const [isCancelSubModalOpen, setIsCancelSubModalOpen] = useState(false);
+  const [isCancellingSub, setIsCancellingSub] = useState(false);
   const [orders, setOrders] = useState<Order[]>([]);
   const [trackingOrder, setTrackingOrder] = useState<Order | null>(null);
   const [ordersViewStyle, setOrdersViewStyle] = useState<'tablet_board' | 'list'>('tablet_board');
@@ -810,6 +814,14 @@ export const BusinessDashboard: React.FC<Props> = ({
   );
   const [salesStartDate, setSalesStartDate] = useState<string>("");
   const [salesEndDate, setSalesEndDate] = useState<string>("");
+  const [salesSearchQuery, setSalesSearchQuery] = useState<string>("");
+  const [orderStartDate, setOrderStartDate] = useState<string>("");
+  const [orderEndDate, setOrderEndDate] = useState<string>("");
+  const [orderSearchQuery, setOrderSearchQuery] = useState<string>("");
+  const [inventorySearchQuery, setInventorySearchQuery] = useState<string>("");
+  const [inventoryStockFilter, setInventoryStockFilter] = useState<
+    "all" | "low_stock" | "out_of_stock" | "in_stock"
+  >("all");
 
   const [isPinSetupOpen, setIsPinSetupOpen] = useState(false);
   const [isHelpCenterOpen, setIsHelpCenterOpen] = useState(false);
@@ -1847,6 +1859,13 @@ export const BusinessDashboard: React.FC<Props> = ({
   const [newRewardDeductStock, setNewRewardDeductStock] = useState(true);
   const [isSavingReward, setIsSavingReward] = useState(false);
   const [reviews, setReviews] = useState<any[]>([]);
+  const [mealReviews, setMealReviews] = useState<MealReview[]>([]);
+  const [mealReviewsLoading, setMealReviewsLoading] = useState(false);
+  const [reviewsTab, setReviewsTab] = useState<"meals" | "restaurant">("meals");
+  const [selectedMealFilter, setSelectedMealFilter] = useState<string>("all");
+  const [mealReviewRatingFilter, setMealReviewRatingFilter] = useState<number>(0);
+  const [mealReviewSearchQuery, setMealReviewSearchQuery] = useState<string>("");
+  const [selectedMealForReviewsModal, setSelectedMealForReviewsModal] = useState<MenuItem | null>(null);
   const [deliveryPersonnel, setDeliveryPersonnel] = useState<User[]>([]);
   const [isAssigningDelivery, setIsAssigningDelivery] = useState<string | null>(
     null,
@@ -1895,6 +1914,7 @@ export const BusinessDashboard: React.FC<Props> = ({
     }
     if (activeView === "reviews") {
       fetchReviews();
+      fetchMealReviews();
     }
     if (activeView === "marketing") {
       fetchMarketingData();
@@ -1905,6 +1925,7 @@ export const BusinessDashboard: React.FC<Props> = ({
   useEffect(() => {
     if (restaurant?.id) {
       fetchFollowers();
+      fetchMealReviews();
 
       // Subscribe to real-time updates for followers
       const channel = supabase
@@ -2402,6 +2423,100 @@ export const BusinessDashboard: React.FC<Props> = ({
       toast.success("Avis supprimé avec succès.");
     } catch (err) {
       console.error("Error deleting review:", err);
+      toast.error("Erreur lors de la suppression de l'avis.");
+    }
+  };
+
+  const fetchMealReviews = async () => {
+    if (!restaurant?.menu || restaurant.menu.length === 0) {
+      setMealReviews([]);
+      return;
+    }
+    setMealReviewsLoading(true);
+    try {
+      const itemIds = restaurant.menu.map((m) => m.id);
+
+      const { data: dbData, error } = await supabase
+        .from("meal_reviews")
+        .select("id, user_id, menu_item_id, rating, comment, created_at, profiles:user_id(full_name, email, avatar_url)")
+        .in("menu_item_id", itemIds)
+        .order("created_at", { ascending: false });
+
+      let fetchedList: MealReview[] = [];
+      if (!error && dbData && dbData.length > 0) {
+        fetchedList = dbData.map((r: any) => ({
+          id: r.id,
+          user_id: r.user_id,
+          menu_item_id: r.menu_item_id,
+          rating: Number(r.rating) || 5,
+          comment: r.comment || "",
+          created_at: r.created_at,
+          profiles: r.profiles ? {
+            full_name: r.profiles.full_name || r.profiles.email?.split("@")[0] || "Client",
+            email: r.profiles.email || "",
+            avatar_url: r.profiles.avatar_url || ""
+          } : undefined
+        }));
+      }
+
+      const reviewsMap = new Map<string, MealReview>();
+      fetchedList.forEach((r) => reviewsMap.set(r.id, r));
+
+      itemIds.forEach((itemId) => {
+        const cached = localStorage.getItem(`meal_reviews_${itemId}`);
+        if (cached) {
+          try {
+            const parsed: MealReview[] = JSON.parse(cached);
+            if (Array.isArray(parsed)) {
+              parsed.forEach((rev) => {
+                if (rev && rev.id && !reviewsMap.has(rev.id)) {
+                  reviewsMap.set(rev.id, rev);
+                }
+              });
+            }
+          } catch (e) {}
+        }
+      });
+
+      const combined = Array.from(reviewsMap.values()).sort(
+        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      );
+
+      setMealReviews(combined);
+    } catch (err) {
+      console.error("Error fetching meal reviews:", err);
+    } finally {
+      setMealReviewsLoading(false);
+    }
+  };
+
+  const handleDeleteMealReview = async (reviewId: string, menuItemId: string) => {
+    if (user.role !== "business") {
+      toast.error("Seul le propriétaire peut supprimer un avis sur un plat.");
+      return;
+    }
+    if (!window.confirm("Voulez-vous vraiment supprimer cet avis sur ce plat ?")) return;
+    try {
+      const { error } = await supabase
+        .from("meal_reviews")
+        .delete()
+        .eq("id", reviewId);
+
+      const updated = mealReviews.filter((r) => r.id !== reviewId);
+      setMealReviews(updated);
+
+      const cached = localStorage.getItem(`meal_reviews_${menuItemId}`);
+      if (cached) {
+        try {
+          const parsed: MealReview[] = JSON.parse(cached);
+          const filtered = parsed.filter((r) => r.id !== reviewId);
+          localStorage.setItem(`meal_reviews_${menuItemId}`, JSON.stringify(filtered));
+        } catch (e) {}
+      }
+
+      toast.success("Avis sur le plat supprimé.");
+    } catch (err) {
+      console.error("Error deleting meal review:", err);
       toast.error("Erreur lors de la suppression de l'avis.");
     }
   };
@@ -3087,19 +3202,39 @@ export const BusinessDashboard: React.FC<Props> = ({
   ).length;
 
   const filteredOrders = orders.filter((order) => {
-    if (orderFilter === "all") return true;
-    if (orderFilter === "active")
-      return [
-        "pending",
-        "preparing",
-        "ready",
-        "delivering",
-        "delivered",
-      ].includes(order.status);
-    if (orderFilter === "completed")
-      return ["completed"].includes(order.status);
-    if (orderFilter === "cancelled")
-      return ["cancelled"].includes(order.status);
+    if (orderFilter === "active" && !["pending", "preparing", "ready", "delivering", "delivered"].includes(order.status)) {
+      return false;
+    }
+    if (orderFilter === "completed" && order.status !== "completed") {
+      return false;
+    }
+    if (orderFilter === "cancelled" && order.status !== "cancelled") {
+      return false;
+    }
+
+    if (orderStartDate) {
+      const start = new Date(orderStartDate);
+      start.setHours(0, 0, 0, 0);
+      if (new Date(order.createdAt) < start) return false;
+    }
+    if (orderEndDate) {
+      const end = new Date(orderEndDate);
+      end.setHours(23, 59, 59, 999);
+      if (new Date(order.createdAt) > end) return false;
+    }
+
+    if (orderSearchQuery.trim()) {
+      const q = orderSearchQuery.toLowerCase().trim();
+      const matchId = order.id.toLowerCase().includes(q);
+      const matchCustomer = (order.customerName || "").toLowerCase().includes(q);
+      const matchPhone = (order.customerPhone || "").toLowerCase().includes(q);
+      const matchItems = order.items.some((i) => i.name.toLowerCase().includes(q));
+      const matchAddress = (order.deliveryAddress || "").toLowerCase().includes(q);
+      if (!matchId && !matchCustomer && !matchPhone && !matchItems && !matchAddress) {
+        return false;
+      }
+    }
+
     return true;
   });
 
@@ -5461,12 +5596,25 @@ export const BusinessDashboard: React.FC<Props> = ({
                   <h4 className="font-bold text-gray-800 dark:text-white text-lg leading-tight">
                     {item.name}
                   </h4>
-                  {item.rating && (
-                    <div className="flex items-center text-amber-500 text-xs font-bold mt-1">
-                      <Star size={12} fill="currentColor" className="mr-1" />
-                      <span>{item.rating}/5 ({item.reviewCount} avis)</span>
-                    </div>
-                  )}
+                  {(() => {
+                    const itemRev = mealReviews.filter((r) => r.menu_item_id === item.id);
+                    const avg = itemRev.length > 0
+                      ? (itemRev.reduce((s, r) => s + r.rating, 0) / itemRev.length).toFixed(1)
+                      : (item.rating ? String(item.rating) : null);
+                    const count = itemRev.length > 0 ? itemRev.length : (item.reviewCount || 0);
+
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedMealForReviewsModal(item)}
+                        className="flex items-center space-x-1 text-amber-600 dark:text-amber-400 hover:text-amber-700 bg-amber-50 dark:bg-amber-950/40 px-2 py-0.5 rounded-lg text-xs font-bold mt-1.5 transition-colors border border-amber-200/60 dark:border-amber-800/40"
+                        title="Consulter tous les avis sur ce plat"
+                      >
+                        <Star size={12} fill="currentColor" className="text-amber-500" />
+                        <span>{avg ? `${avg}/5` : "Non noté"} ({count} avis)</span>
+                      </button>
+                    );
+                  })()}
                 </div>
                 <div className="flex space-x-1">
                   <button
@@ -5561,6 +5709,16 @@ export const BusinessDashboard: React.FC<Props> = ({
                   )}
                 </div>
                 <div className="flex space-x-2 transition-opacity">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedMealForReviewsModal(item);
+                    }}
+                    className="p-2 text-amber-600 hover:text-amber-700 bg-amber-50 dark:bg-amber-950/40 hover:bg-amber-100 rounded-full transition-colors flex items-center justify-center shadow-sm"
+                    title="Voir les avis clients sur ce plat"
+                  >
+                    <MessageSquare size={18} />
+                  </button>
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
@@ -6259,186 +6417,477 @@ export const BusinessDashboard: React.FC<Props> = ({
     </div>
   );
 
-  const renderReviews = () => (
-    <div className="space-y-6 animate-in fade-in duration-500">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-bold text-gray-900 dark:text-white tracking-tight flex items-center">
-            <Star className="mr-3 text-yellow-500" size={28} />
-            Avis Clients
-          </h2>
-          <p className="text-gray-500 dark:text-gray-400 text-sm">
-            Consultez les retours de vos clients et répondez-y.
-          </p>
-        </div>
-        <div className="flex items-center space-x-3">
-          <button
-            onClick={fetchReviews}
-            className="p-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-          >
-            <RefreshCw size={20} />
-          </button>
-          <div className="bg-yellow-500 text-white px-4 py-2 rounded-xl font-bold text-sm shadow-lg shadow-yellow-200 dark:shadow-yellow-900/20 flex items-center">
-            <Star size={18} className="mr-2 fill-white" /> {reviews.length} Avis
+  const renderReviews = () => {
+    const filteredMealReviewsList = mealReviews.filter((review) => {
+      if (selectedMealFilter !== "all" && review.menu_item_id !== selectedMealFilter) {
+        return false;
+      }
+      if (mealReviewRatingFilter > 0 && review.rating !== mealReviewRatingFilter) {
+        return false;
+      }
+      if (mealReviewSearchQuery.trim()) {
+        const q = mealReviewSearchQuery.toLowerCase().trim();
+        const menuItem = restaurant.menu.find((m) => m.id === review.menu_item_id);
+        const itemName = menuItem?.name?.toLowerCase() || "";
+        const comment = (review.comment || "").toLowerCase();
+        const userName = (review.profiles?.full_name || review.profiles?.email || "").toLowerCase();
+        if (!itemName.includes(q) && !comment.includes(q) && !userName.includes(q)) {
+          return false;
+        }
+      }
+      return true;
+    });
+
+    const avgMealRating = mealReviews.length > 0
+      ? (mealReviews.reduce((sum, r) => sum + r.rating, 0) / mealReviews.length).toFixed(1)
+      : "0.0";
+
+    const evaluatedMealsCount = new Set(mealReviews.map((r) => r.menu_item_id)).size;
+    const fiveStarMealCount = mealReviews.filter((r) => r.rating === 5).length;
+
+    return (
+      <div className="space-y-6 animate-in fade-in duration-500">
+        {/* HEADER SECTION */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <h2 className="text-2xl font-bold text-gray-900 dark:text-white tracking-tight flex items-center">
+              <Star className="mr-3 text-amber-500" size={28} />
+              Avis Clients & Plats
+            </h2>
+            <p className="text-gray-500 dark:text-gray-400 text-sm">
+              Consultez les retours de vos clients sur votre restaurant et sur chacun de vos plats.
+            </p>
+          </div>
+          <div className="flex items-center space-x-3">
+            <button
+              onClick={() => {
+                fetchReviews();
+                fetchMealReviews();
+                toast.success("Avis actualisés");
+              }}
+              className="p-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-xs"
+              title="Actualiser les avis"
+            >
+              <RefreshCw size={18} className={mealReviewsLoading ? "animate-spin" : ""} />
+            </button>
           </div>
         </div>
-      </div>
 
-      <div className="grid grid-cols-1 gap-4">
-        {reviews.map((review) => {
-          const profileData =
-            (Array.isArray(review.profiles)
-              ? review.profiles[0]
-              : review.profiles) || profilesCache[review.user_id];
-          const displayName =
-            profileData?.full_name ||
-            profileData?.email ||
-            (review.user_id
-              ? `Client #${review.user_id.substring(0, 5)}`
-              : "Utilisateur");
+        {/* TABS SWITCHER: PLATS VS RESTAURANT */}
+        <div className="flex items-center space-x-2 bg-gray-100 dark:bg-gray-800/80 p-1.5 rounded-2xl border border-gray-200/60 dark:border-gray-700/60">
+          <button
+            onClick={() => setReviewsTab("meals")}
+            className={`flex-1 flex items-center justify-center space-x-2 py-2.5 px-4 rounded-xl text-xs font-bold transition-all ${
+              reviewsTab === "meals"
+                ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm"
+                : "text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
+            }`}
+          >
+            <Utensils size={16} className={reviewsTab === "meals" ? "text-brand-600 dark:text-brand-400" : ""} />
+            <span>Avis sur les Plats ({mealReviews.length})</span>
+          </button>
+          <button
+            onClick={() => setReviewsTab("restaurant")}
+            className={`flex-1 flex items-center justify-center space-x-2 py-2.5 px-4 rounded-xl text-xs font-bold transition-all ${
+              reviewsTab === "restaurant"
+                ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm"
+                : "text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
+            }`}
+          >
+            <Star size={16} className={reviewsTab === "restaurant" ? "text-amber-500" : ""} />
+            <span>Avis Établissement ({reviews.length})</span>
+          </button>
+        </div>
 
-          return (
-            <div
-              key={review.id}
-              className="bg-white dark:bg-gray-800 p-6 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm hover:shadow-md transition-shadow"
-            >
-              <div className="flex justify-between items-start mb-4">
-                <div className="flex items-center space-x-3">
-                  <div className="w-10 h-10 rounded-full bg-brand-100 dark:bg-brand-900/30 flex items-center justify-center font-bold text-brand-600 dark:text-brand-400">
-                    {displayName.charAt(0).toUpperCase()}
-                  </div>
-                  <div>
-                    <h4 className="font-bold text-gray-900 dark:text-white">
-                      {displayName}
-                    </h4>
-                    <div className="flex items-center text-yellow-400 mt-0.5">
-                      {[1, 2, 3, 4, 5].map((star) => (
-                        <Star
-                          key={star}
-                          size={14}
-                          fill={review.rating >= star ? "currentColor" : "none"}
-                        />
-                      ))}
-                      <span className="text-xs text-gray-400 ml-2 font-medium">
-                        {new Date(review.created_at).toLocaleDateString()}
-                      </span>
-                    </div>
-                  </div>
+        {/* CONTENT FOR TAB: AVIS SUR LES PLATS */}
+        {reviewsTab === "meals" && (
+          <div className="space-y-6">
+            {/* STATS SUMMARY CARDS */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="bg-white dark:bg-gray-800 p-4 rounded-2xl border border-gray-100 dark:border-gray-700/60 shadow-xs flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-50 dark:bg-amber-950/40 text-amber-500 flex items-center justify-center shrink-0">
+                  <Star size={20} fill="currentColor" />
                 </div>
-                {review.order_id && (
-                  <button
-                    onClick={() => {
-                      const order = orders.find(
-                        (o) => o.id === review.order_id,
-                      );
-                      if (order) {
-                        setOrderFilter("all");
-                        navigateTo("orders");
-                        // Scroll to order would be nice but complex here
-                      } else {
-                        toast.info("Détails de la commande non disponibles.");
-                      }
-                    }}
-                    className="text-[10px] font-bold text-brand-600 bg-brand-50 dark:bg-brand-900/20 px-2 py-1 rounded hover:underline"
-                  >
-                    Voir Commande
-                  </button>
-                )}
+                <div>
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Note Moy. Plats</p>
+                  <p className="text-xl font-black text-gray-900 dark:text-white">{avgMealRating} <span className="text-xs text-gray-400 font-normal">/ 5</span></p>
+                </div>
               </div>
 
-              <p className="text-gray-700 dark:text-gray-300 text-sm mb-4">
-                "{review.comment || "Aucun commentaire"}"
-              </p>
+              <div className="bg-white dark:bg-gray-800 p-4 rounded-2xl border border-gray-100 dark:border-gray-700/60 shadow-xs flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-xl bg-brand-50 dark:bg-brand-950/40 text-brand-600 flex items-center justify-center shrink-0">
+                  <MessageSquare size={20} />
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Total Avis Plats</p>
+                  <p className="text-xl font-black text-gray-900 dark:text-white">{mealReviews.length}</p>
+                </div>
+              </div>
 
-              {review.image_url && (
-                <div className="mb-4">
-                  <img
-                    src={review.image_url}
-                    alt="Avis client"
-                    className="w-full max-w-xs h-48 object-cover rounded-xl border border-gray-100 dark:border-gray-700"
-                    referrerPolicy="no-referrer"
+              <div className="bg-white dark:bg-gray-800 p-4 rounded-2xl border border-gray-100 dark:border-gray-700/60 shadow-xs flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-xl bg-blue-50 dark:bg-blue-950/40 text-blue-600 flex items-center justify-center shrink-0">
+                  <Utensils size={20} />
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Plats Évalués</p>
+                  <p className="text-xl font-black text-gray-900 dark:text-white">{evaluatedMealsCount} <span className="text-xs text-gray-400 font-normal">/ {restaurant.menu.length}</span></p>
+                </div>
+              </div>
+
+              <div className="bg-white dark:bg-gray-800 p-4 rounded-2xl border border-gray-100 dark:border-gray-700/60 shadow-xs flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 flex items-center justify-center shrink-0">
+                  <Sparkles size={20} />
+                </div>
+                <div>
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Avis 5 Étoiles</p>
+                  <p className="text-xl font-black text-gray-900 dark:text-white">{fiveStarMealCount}</p>
+                </div>
+              </div>
+            </div>
+
+            {/* FILTERS & SEARCH BAR FOR MEAL REVIEWS */}
+            <div className="bg-white dark:bg-gray-800 p-4 rounded-2xl border border-gray-100 dark:border-gray-700 space-y-3">
+              <div className="flex flex-col md:flex-row items-center gap-3">
+                {/* Search */}
+                <div className="relative flex-1 w-full">
+                  <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+                  <input
+                    type="text"
+                    value={mealReviewSearchQuery}
+                    onChange={(e) => setMealReviewSearchQuery(e.target.value)}
+                    placeholder="Rechercher par plat, client ou commentaire..."
+                    className="w-full pl-10 pr-9 py-2.5 bg-gray-50 dark:bg-gray-700/60 border border-gray-200 dark:border-gray-600 rounded-2xl text-xs font-bold text-gray-800 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-brand-500"
                   />
+                  {mealReviewSearchQuery && (
+                    <button
+                      onClick={() => setMealReviewSearchQuery("")}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
                 </div>
-              )}
 
-              {review.reply ? (
-                <div className="bg-gray-50 dark:bg-gray-700/50 p-4 rounded-xl border-l-4 border-brand-500">
-                  <div className="flex justify-between items-center mb-1">
-                    <p className="text-xs font-bold text-brand-600 dark:text-brand-400">
-                      Votre réponse :
-                    </p>
-                    <span className="text-[10px] text-gray-400">
-                      {new Date(review.reply_at).toLocaleDateString()}
-                    </span>
-                  </div>
-                  <p className="text-sm text-gray-600 dark:text-gray-300">
-                    {review.reply}
-                  </p>
+                {/* Dish Select Dropdown */}
+                <select
+                  value={selectedMealFilter}
+                  onChange={(e) => setSelectedMealFilter(e.target.value)}
+                  className="w-full md:w-64 bg-gray-50 dark:bg-gray-700/60 border border-gray-200 dark:border-gray-600 rounded-2xl px-3 py-2.5 text-xs font-bold text-gray-800 dark:text-white outline-none focus:ring-2 focus:ring-brand-500"
+                >
+                  <option value="all">Tous les plats ({mealReviews.length} avis)</option>
+                  {restaurant.menu.map((m) => {
+                    const cnt = mealReviews.filter((r) => r.menu_item_id === m.id).length;
+                    return (
+                      <option key={m.id} value={m.id}>
+                        {m.name} ({cnt} avis)
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+
+              {/* Star Rating Filters */}
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-gray-100 dark:border-gray-700/50">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest mr-1">Filtrer note :</span>
+                  {[0, 5, 4, 3, 2, 1].map((ratingVal) => (
+                    <button
+                      key={ratingVal}
+                      onClick={() => setMealReviewRatingFilter(ratingVal)}
+                      className={`px-2.5 py-1 text-[10px] font-bold rounded-xl transition-all ${
+                        mealReviewRatingFilter === ratingVal
+                          ? "bg-amber-500 text-white shadow-xs"
+                          : "bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600"
+                      }`}
+                    >
+                      {ratingVal === 0 ? "Toutes" : `${ratingVal} ★`}
+                    </button>
+                  ))}
+                  {(mealReviewRatingFilter > 0 || selectedMealFilter !== "all" || mealReviewSearchQuery) && (
+                    <button
+                      onClick={() => {
+                        setMealReviewRatingFilter(0);
+                        setSelectedMealFilter("all");
+                        setMealReviewSearchQuery("");
+                      }}
+                      className="px-2.5 py-1 text-[10px] font-bold bg-red-50 dark:bg-red-950/30 text-red-600 rounded-xl hover:bg-red-100 transition-all ml-1"
+                    >
+                      Réinitialiser
+                    </button>
+                  )}
                 </div>
-              ) : (
-                <div className="mt-2">
-                  {isReplyingTo === review.id ? (
-                    <div className="space-y-3 animate-in slide-in-from-top-2">
-                      <textarea
-                        className="w-full p-3 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl text-sm focus:ring-2 focus:ring-brand-500 outline-none resize-none"
-                        rows={3}
-                        placeholder="Répondez à votre client..."
-                        value={replyText}
-                        onChange={(e) => setReplyText(e.target.value)}
-                      />
-                      <div className="flex justify-end space-x-2">
-                        <button
-                          onClick={() => setIsReplyingTo(null)}
-                          className="px-4 py-2 text-xs font-bold text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
-                        >{t('cancel')}</button>
-                        <button
-                          onClick={() => handleReplyReview(review.id)}
-                          disabled={isSavingReply}
-                          className="px-4 py-2 bg-brand-600 text-white rounded-lg text-xs font-bold hover:bg-brand-700 shadow-md disabled:opacity-50"
-                        >
-                          {isSavingReply ? "Envoi..." : "Répondre"}
-                        </button>
+
+                <p className="text-[11px] font-bold text-gray-500 dark:text-gray-400">
+                  {filteredMealReviewsList.length} avis affiché{filteredMealReviewsList.length > 1 ? "s" : ""}
+                </p>
+              </div>
+            </div>
+
+            {/* MEAL REVIEWS LIST */}
+            <div className="grid grid-cols-1 gap-4">
+              {filteredMealReviewsList.map((review) => {
+                const menuItem = restaurant.menu.find((m) => m.id === review.menu_item_id);
+                const authorName = review.profiles?.full_name || review.profiles?.email?.split('@')[0] || "Client";
+
+                return (
+                  <div
+                    key={review.id}
+                    className="bg-white dark:bg-gray-800 p-5 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm hover:shadow-md transition-shadow space-y-3"
+                  >
+                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pb-3 border-b border-gray-100 dark:border-gray-700/60">
+                      {/* Dish Info */}
+                      <div className="flex items-center space-x-3">
+                        <img
+                          src={menuItem?.image || "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=120&q=80"}
+                          alt={menuItem?.name || "Plat"}
+                          className="w-12 h-12 rounded-xl object-cover border border-gray-200 dark:border-gray-700 shrink-0"
+                        />
+                        <div>
+                          <div className="flex items-center space-x-2">
+                            <h4 className="font-bold text-gray-900 dark:text-white text-base">
+                              {menuItem?.name || "Plat supprimé ou inconnu"}
+                            </h4>
+                            {menuItem?.category && (
+                              <span className="px-2 py-0.5 text-[10px] font-bold bg-brand-50 dark:bg-brand-900/30 text-brand-600 dark:text-brand-400 rounded-md capitalize">
+                                {menuItem.category}
+                              </span>
+                            )}
+                          </div>
+                          {menuItem && (
+                            <p className="text-xs font-bold text-brand-600 dark:text-brand-400 mt-0.5">
+                              {formatPrice(menuItem.price)}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Author & Rating */}
+                      <div className="flex items-center space-x-3 self-end sm:self-auto">
+                        <div className="text-right">
+                          <p className="font-bold text-xs text-gray-900 dark:text-white">{authorName}</p>
+                          <div className="flex items-center text-amber-400 justify-end mt-0.5">
+                            {[1, 2, 3, 4, 5].map((st) => (
+                              <Star
+                                key={st}
+                                size={12}
+                                fill={review.rating >= st ? "currentColor" : "none"}
+                              />
+                            ))}
+                          </div>
+                          <p className="text-[10px] text-gray-400 mt-0.5">
+                            {new Date(review.created_at).toLocaleDateString()}
+                          </p>
+                        </div>
+                        <div className="w-9 h-9 rounded-full bg-brand-100 dark:bg-brand-900/30 text-brand-600 dark:text-brand-400 font-bold text-xs flex items-center justify-center shrink-0">
+                          {authorName.charAt(0).toUpperCase()}
+                        </div>
                       </div>
                     </div>
-                  ) : (
-                    <>
-                      <button
-                        onClick={() => setIsReplyingTo(review.id)}
-                        className="text-xs font-bold text-brand-600 hover:underline flex items-center"
-                      >
-                        <MessageSquare size={14} className="mr-1" /> Répondre à
-                        cet avis
-                      </button>
-                      {user.role === "business" && (
+
+                    {/* Comment */}
+                    <div className="bg-gray-50 dark:bg-gray-700/40 p-3.5 rounded-xl border border-gray-100 dark:border-gray-700/50">
+                      <p className="text-xs text-gray-700 dark:text-gray-300 italic">
+                        "{review.comment || "Aucun commentaire rédigé."}"
+                      </p>
+                    </div>
+
+                    {/* Footer Actions */}
+                    <div className="flex justify-between items-center pt-1">
+                      {menuItem && (
                         <button
-                          onClick={() => handleDeleteReview(review.id)}
-                          className="text-xs font-bold text-red-500 hover:text-red-700 flex items-center ml-4"
+                          onClick={() => setSelectedMealForReviewsModal(menuItem)}
+                          className="text-[11px] font-bold text-brand-600 dark:text-brand-400 hover:underline flex items-center"
                         >
-                          <Trash2 size={14} className="mr-1" /> Supprimer
+                          <MessageSquare size={13} className="mr-1" />
+                          Voir tous les avis sur ce plat ({mealReviews.filter(r => r.menu_item_id === menuItem.id).length})
                         </button>
                       )}
-                    </>
-                  )}
+
+                      {user.role === "business" && (
+                        <button
+                          onClick={() => handleDeleteMealReview(review.id, review.menu_item_id)}
+                          className="text-xs font-bold text-red-500 hover:text-red-700 flex items-center ml-auto"
+                        >
+                          <Trash2 size={13} className="mr-1" /> Supprimer
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+
+              {filteredMealReviewsList.length === 0 && (
+                <div className="py-16 text-center bg-white dark:bg-gray-800 rounded-3xl border border-dashed border-gray-200 dark:border-gray-700">
+                  <Utensils className="mx-auto h-12 w-12 text-gray-300 dark:text-gray-600 mb-3" />
+                  <p className="text-gray-500 dark:text-gray-400 font-bold">
+                    Aucun avis sur les plats correspondant à vos critères.
+                  </p>
+                  <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                    Les avis déposés par vos clients sur chacun des plats de votre menu s'afficheront ici.
+                  </p>
                 </div>
               )}
             </div>
-          );
-        })}
-        {reviews.length === 0 && (
-          <div className="py-20 text-center bg-white dark:bg-gray-800 rounded-3xl border border-dashed border-gray-200 dark:border-gray-700">
-            <Star className="mx-auto h-12 w-12 text-gray-300 dark:text-gray-600 mb-3" />
-            <p className="text-gray-500 dark:text-gray-400 font-bold">
-              Aucun avis pour le moment.
-            </p>
-            <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
-              Les avis apparaîtront ici une fois que les clients auront noté
-              leurs commandes.
-            </p>
+          </div>
+        )}
+
+        {/* CONTENT FOR TAB: AVIS ÉTABLISSEMENT */}
+        {reviewsTab === "restaurant" && (
+          <div className="grid grid-cols-1 gap-4">
+            {reviews.map((review) => {
+              const profileData =
+                (Array.isArray(review.profiles)
+                  ? review.profiles[0]
+                  : review.profiles) || profilesCache[review.user_id];
+              const displayName =
+                profileData?.full_name ||
+                profileData?.email ||
+                (review.user_id
+                  ? `Client #${review.user_id.substring(0, 5)}`
+                  : "Utilisateur");
+
+              return (
+                <div
+                  key={review.id}
+                  className="bg-white dark:bg-gray-800 p-6 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm hover:shadow-md transition-shadow"
+                >
+                  <div className="flex justify-between items-start mb-4">
+                    <div className="flex items-center space-x-3">
+                      <div className="w-10 h-10 rounded-full bg-brand-100 dark:bg-brand-900/30 flex items-center justify-center font-bold text-brand-600 dark:text-brand-400">
+                        {displayName.charAt(0).toUpperCase()}
+                      </div>
+                      <div>
+                        <h4 className="font-bold text-gray-900 dark:text-white">
+                          {displayName}
+                        </h4>
+                        <div className="flex items-center text-yellow-400 mt-0.5">
+                          {[1, 2, 3, 4, 5].map((star) => (
+                            <Star
+                              key={star}
+                              size={14}
+                              fill={review.rating >= star ? "currentColor" : "none"}
+                            />
+                          ))}
+                          <span className="text-xs text-gray-400 ml-2 font-medium">
+                            {new Date(review.created_at).toLocaleDateString()}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    {review.order_id && (
+                      <button
+                        onClick={() => {
+                          const order = orders.find(
+                            (o) => o.id === review.order_id,
+                          );
+                          if (order) {
+                            setOrderFilter("all");
+                            navigateTo("orders");
+                          } else {
+                            toast.info("Détails de la commande non disponibles.");
+                          }
+                        }}
+                        className="text-[10px] font-bold text-brand-600 bg-brand-50 dark:bg-brand-900/20 px-2 py-1 rounded hover:underline"
+                      >
+                        Voir Commande
+                      </button>
+                    )}
+                  </div>
+
+                  <p className="text-gray-700 dark:text-gray-300 text-sm mb-4">
+                    "{review.comment || "Aucun commentaire"}"
+                  </p>
+
+                  {review.image_url && (
+                    <div className="mb-4">
+                      <img
+                        src={review.image_url}
+                        alt="Avis client"
+                        className="w-full max-w-xs h-48 object-cover rounded-xl border border-gray-100 dark:border-gray-700"
+                        referrerPolicy="no-referrer"
+                      />
+                    </div>
+                  )}
+
+                  {review.reply ? (
+                    <div className="bg-gray-50 dark:bg-gray-700/50 p-4 rounded-xl border-l-4 border-brand-500">
+                      <div className="flex justify-between items-center mb-1">
+                        <p className="text-xs font-bold text-brand-600 dark:text-brand-400">
+                          Votre réponse :
+                        </p>
+                        <span className="text-[10px] text-gray-400">
+                          {new Date(review.reply_at).toLocaleDateString()}
+                        </span>
+                      </div>
+                      <p className="text-sm text-gray-600 dark:text-gray-300">
+                        {review.reply}
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="mt-2">
+                      {isReplyingTo === review.id ? (
+                        <div className="space-y-3 animate-in slide-in-from-top-2">
+                          <textarea
+                            className="w-full p-3 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl text-sm focus:ring-2 focus:ring-brand-500 outline-none resize-none"
+                            rows={3}
+                            placeholder="Répondez à votre client..."
+                            value={replyText}
+                            onChange={(e) => setReplyText(e.target.value)}
+                          />
+                          <div className="flex justify-end space-x-2">
+                            <button
+                              onClick={() => setIsReplyingTo(null)}
+                              className="px-4 py-2 text-xs font-bold text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
+                            >{t('cancel')}</button>
+                            <button
+                              onClick={() => handleReplyReview(review.id)}
+                              disabled={isSavingReply}
+                              className="px-4 py-2 bg-brand-600 text-white rounded-lg text-xs font-bold hover:bg-brand-700 shadow-md disabled:opacity-50"
+                            >
+                              {isSavingReply ? "Envoi..." : "Répondre"}
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => setIsReplyingTo(review.id)}
+                            className="text-xs font-bold text-brand-600 hover:underline flex items-center"
+                          >
+                            <MessageSquare size={14} className="mr-1" /> Répondre à cet avis
+                          </button>
+                          {user.role === "business" && (
+                            <button
+                              onClick={() => handleDeleteReview(review.id)}
+                              className="text-xs font-bold text-red-500 hover:text-red-700 flex items-center ml-4"
+                            >
+                              <Trash2 size={14} className="mr-1" /> Supprimer
+                            </button>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            {reviews.length === 0 && (
+              <div className="py-20 text-center bg-white dark:bg-gray-800 rounded-3xl border border-dashed border-gray-200 dark:border-gray-700">
+                <Star className="mx-auto h-12 w-12 text-gray-300 dark:text-gray-600 mb-3" />
+                <p className="text-gray-500 dark:text-gray-400 font-bold">
+                  Aucun avis sur l'établissement pour le moment.
+                </p>
+                <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                  Les avis généraux de votre établissement s'afficheront ici.
+                </p>
+              </div>
+            )}
           </div>
         )}
       </div>
-    </div>
-  );
+    );
+  };
 
   const renderTeam = () => (
     <FeatureGate feature="staffManagement">
@@ -7052,7 +7501,7 @@ export const BusinessDashboard: React.FC<Props> = ({
                     Flux financiers
                   </p>
                   <p className="text-[10px] text-gray-400 font-bold tracking-widest mt-1">
-                    Modes de paiement • Gateway
+                    Modes de paiement • Mobile Money
                   </p>
                 </div>
               </div>
@@ -7182,53 +7631,44 @@ export const BusinessDashboard: React.FC<Props> = ({
                   </div>
 
                   <div className="flex items-center gap-3">
-                    <button
-                      onClick={async () => {
-                        if (!subInfo.canModify) {
-                          toast.error(
-                            `Annulation impossible : Votre abonnement est verrouillé pendant encore ${subInfo.remainingStr}. Disponible le ${subInfo.unlockDate?.toLocaleString('fr-FR')}.`,
-                            { id: "sub-cancel-lock" }
-                          );
-                          return;
-                        }
-
-                        // Trigger cancel to Free tier
-                        if (window.confirm("Êtes-vous sûr de vouloir annuler votre abonnement actuel et repasser au forfait Gratuit ?")) {
+                    {restaurant.subscriptionStatus === "cancelled" ? (
+                      <button
+                        onClick={async () => {
                           try {
                             const { error } = await supabase
                               .from("restaurants")
                               .update({
-                                subscription_tier: "free",
-                                subscription_status: "active",
-                                subscription_end_date: null
+                                subscription_status: "active"
                               })
                               .eq("id", restaurant.id);
-                            
+
                             if (error) throw error;
 
-                            toast.success("Votre abonnement a été annulé avec succès. Vous êtes repassé au forfait Gratuit.", { icon: "✨" });
-                            
+                            toast.success("Votre abonnement a été réactivé avec succès ! Votre renouvellement automatique est restauré.", { icon: "✨" });
+
                             onUpdateRestaurant({
                               ...restaurant,
-                              subscriptionTier: "free",
-                              subscriptionStatus: "active",
-                              subscriptionEndDate: undefined
+                              subscriptionStatus: "active"
                             });
                           } catch (err) {
-                            console.error("Error cancelling subscription:", err);
-                            toast.error("Erreur lors de l'annulation de l'abonnement.");
+                            console.error("Error reactivating subscription:", err);
+                            toast.error("Erreur lors de la réactivation de l'abonnement.");
                           }
-                        }
-                      }}
-                      className={`px-6 py-4 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center gap-2 ${
-                        subInfo.canModify 
-                          ? "bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 shadow-sm" 
-                          : "bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed dark:bg-gray-800/50 dark:border-gray-700"
-                      }`}
-                    >
-                      <X size={14} />
-                      Annuler l'abonnement
-                    </button>
+                        }}
+                        className="px-6 py-4 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg shadow-emerald-600/20 active:scale-95 cursor-pointer"
+                      >
+                        <CheckCircle size={16} />
+                        Réactiver mon abonnement
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => setIsCancelSubModalOpen(true)}
+                        className="px-6 py-4 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center gap-2 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 shadow-sm active:scale-95 cursor-pointer dark:bg-red-900/20 dark:text-red-400 dark:border-red-800/40 dark:hover:bg-red-900/40"
+                      >
+                        <X size={14} />
+                        Annuler l'abonnement
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -8845,6 +9285,117 @@ export const BusinessDashboard: React.FC<Props> = ({
           </div>
         </div>
 
+        {/* BARRE DE RECHERCHE ET FILTRE PAR DATE POUR LES COMMANDES */}
+        <div className="bg-white dark:bg-gray-800 p-4 rounded-3xl shadow-sm border border-gray-100 dark:border-gray-750 space-y-3">
+          <div className="flex flex-col md:flex-row items-center gap-3">
+            {/* Input Recherche Textuelle */}
+            <div className="relative flex-1 w-full">
+              <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+              <input
+                type="text"
+                value={orderSearchQuery}
+                onChange={(e) => setOrderSearchQuery(e.target.value)}
+                placeholder="Rechercher par client, N° commande, téléphone, plat..."
+                className="w-full pl-10 pr-9 py-2.5 bg-gray-50 dark:bg-gray-700/60 border border-gray-200 dark:border-gray-600 rounded-2xl text-xs font-bold text-gray-800 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-brand-500"
+              />
+              {orderSearchQuery && (
+                <button
+                  onClick={() => setOrderSearchQuery("")}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </div>
+
+            {/* Selecteur de Plage de Dates */}
+            <div className="flex items-center gap-2 w-full md:w-auto bg-gray-50 dark:bg-gray-700/60 p-1.5 rounded-2xl border border-gray-200 dark:border-gray-600">
+              <span className="text-[10px] font-black text-gray-400 uppercase tracking-wider pl-2">Dates :</span>
+              <input
+                type="date"
+                value={orderStartDate}
+                onChange={(e) => setOrderStartDate(e.target.value)}
+                className="bg-transparent text-xs font-bold text-gray-800 dark:text-white outline-none border-none px-1"
+              />
+              <span className="text-gray-400 font-bold">→</span>
+              <input
+                type="date"
+                value={orderEndDate}
+                onChange={(e) => setOrderEndDate(e.target.value)}
+                className="bg-transparent text-xs font-bold text-gray-800 dark:text-white outline-none border-none px-1"
+              />
+              {(orderStartDate || orderEndDate) && (
+                <button
+                  onClick={() => {
+                    setOrderStartDate("");
+                    setOrderEndDate("");
+                  }}
+                  className="p-1.5 bg-red-100 dark:bg-red-900/30 text-red-600 rounded-xl hover:bg-red-200 transition-all"
+                  title="Réinitialiser les dates"
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Raccourcis Rapides de Date */}
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-gray-100 dark:border-gray-700/50">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest mr-1">Raccourcis :</span>
+              <button
+                onClick={() => {
+                  const today = new Date().toISOString().split("T")[0];
+                  setOrderStartDate(today);
+                  setOrderEndDate(today);
+                }}
+                className="px-2.5 py-1 text-[10px] font-bold bg-gray-100 dark:bg-gray-700 hover:bg-brand-50 hover:text-brand-600 dark:hover:bg-gray-600 text-gray-600 dark:text-gray-300 rounded-xl transition-all"
+              >
+                Aujourd'hui
+              </button>
+              <button
+                onClick={() => {
+                  const now = new Date();
+                  const start = new Date(now);
+                  start.setDate(start.getDate() - 6);
+                  setOrderStartDate(start.toISOString().split("T")[0]);
+                  setOrderEndDate(now.toISOString().split("T")[0]);
+                }}
+                className="px-2.5 py-1 text-[10px] font-bold bg-gray-100 dark:bg-gray-700 hover:bg-brand-50 hover:text-brand-600 dark:hover:bg-gray-600 text-gray-600 dark:text-gray-300 rounded-xl transition-all"
+              >
+                7 derniers jours
+              </button>
+              <button
+                onClick={() => {
+                  const now = new Date();
+                  const start = new Date(now.getFullYear(), now.getMonth(), 1);
+                  setOrderStartDate(start.toISOString().split("T")[0]);
+                  setOrderEndDate(now.toISOString().split("T")[0]);
+                }}
+                className="px-2.5 py-1 text-[10px] font-bold bg-gray-100 dark:bg-gray-700 hover:bg-brand-50 hover:text-brand-600 dark:hover:bg-gray-600 text-gray-600 dark:text-gray-300 rounded-xl transition-all"
+              >
+                Ce mois
+              </button>
+              {(orderStartDate || orderEndDate || orderSearchQuery) && (
+                <button
+                  onClick={() => {
+                    setOrderStartDate("");
+                    setOrderEndDate("");
+                    setOrderSearchQuery("");
+                  }}
+                  className="px-2.5 py-1 text-[10px] font-bold bg-red-50 dark:bg-red-950/30 text-red-600 rounded-xl hover:bg-red-100 transition-all"
+                >
+                  Tout effacer
+                </button>
+              )}
+            </div>
+
+            <p className="text-[11px] font-bold text-gray-500 dark:text-gray-400">
+              {filteredOrders.length} commande{filteredOrders.length > 1 ? "s" : ""} trouvée{filteredOrders.length > 1 ? "s" : ""}
+            </p>
+          </div>
+        </div>
+
         {/* PANNEAU DE RAPPELS ET ALERTES EN DIRECT */}
         {(unacceptedReminders.length > 0 || undeliveredReminders.length > 0) && (
           <div className="bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900/40 rounded-3xl p-5 shadow-xs flex flex-col space-y-3">
@@ -9669,6 +10220,40 @@ export const BusinessDashboard: React.FC<Props> = ({
       );
     }
 
+    let transactionOrders = filteredOrders;
+    if (salesSearchQuery.trim()) {
+      const q = salesSearchQuery.toLowerCase().trim();
+      transactionOrders = transactionOrders.filter((order) => {
+        const matchId = order.id.toLowerCase().includes(q);
+        const matchCustomer = (order.customerName || "").toLowerCase().includes(q);
+        const matchMethod = (order.paymentMethod || "").toLowerCase().includes(q);
+        const matchItems = order.items.some((i) => i.name.toLowerCase().includes(q));
+        const matchAmount = order.totalAmount.toString().includes(q);
+        return matchId || matchCustomer || matchMethod || matchItems || matchAmount;
+      });
+    }
+
+    const filteredInventory = restaurant.menu
+      .filter((item) => {
+        if (item.stock === undefined) return false;
+
+        if (inventorySearchQuery.trim()) {
+          const q = inventorySearchQuery.toLowerCase().trim();
+          const matchName = item.name.toLowerCase().includes(q);
+          const matchCategory = (item.category || "").toLowerCase().includes(q);
+          const matchDescription = (item.description || "").toLowerCase().includes(q);
+          if (!matchName && !matchCategory && !matchDescription) return false;
+        }
+
+        const threshold = item.lowStockThreshold || 5;
+        if (inventoryStockFilter === "low_stock" && item.stock > threshold) return false;
+        if (inventoryStockFilter === "out_of_stock" && item.stock > 0) return false;
+        if (inventoryStockFilter === "in_stock" && item.stock <= threshold) return false;
+
+        return true;
+      })
+      .sort((a, b) => (a.stock || 0) - (b.stock || 0));
+
     const filteredRevenue = filteredOrders.reduce(
       (sum, o) => sum + o.totalAmount,
       0,
@@ -9764,7 +10349,7 @@ export const BusinessDashboard: React.FC<Props> = ({
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
             <div className="glass p-8 rounded-[32px] border border-white/20 dark:border-white/5 lg:col-span-2 shadow-2xl">
-              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-6">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
                 <h3 className="font-display font-bold text-xl text-gray-900 dark:text-white flex items-center tracking-tight">
                   <TrendingUp
                     size={24}
@@ -9772,32 +10357,83 @@ export const BusinessDashboard: React.FC<Props> = ({
                   />{" "}
                   Aperçu analytique
                 </h3>
-                <div className="flex items-center space-x-2 glass p-2 rounded-2xl border border-white/20 shadow-inner">
-                  <input
-                    type="date"
-                    value={salesStartDate}
-                    onChange={(e) => setSalesStartDate(e.target.value)}
-                    className="bg-transparent text-xs font-bold text-gray-700 dark:text-gray-200 outline-none border-none px-2"
-                  />
-                  <span className="text-gray-400 font-bold">→</span>
-                  <input
-                    type="date"
-                    value={salesEndDate}
-                    onChange={(e) => setSalesEndDate(e.target.value)}
-                    className="bg-transparent text-xs font-bold text-gray-700 dark:text-gray-200 outline-none border-none px-2"
-                  />
-                  {(salesStartDate || salesEndDate) && (
+                <div className="flex flex-col sm:items-end gap-2">
+                  <div className="flex items-center space-x-2 glass p-2 rounded-2xl border border-white/20 shadow-inner">
+                    <input
+                      type="date"
+                      value={salesStartDate}
+                      onChange={(e) => setSalesStartDate(e.target.value)}
+                      className="bg-transparent text-xs font-bold text-gray-700 dark:text-gray-200 outline-none border-none px-2"
+                    />
+                    <span className="text-gray-400 font-bold">→</span>
+                    <input
+                      type="date"
+                      value={salesEndDate}
+                      onChange={(e) => setSalesEndDate(e.target.value)}
+                      className="bg-transparent text-xs font-bold text-gray-700 dark:text-gray-200 outline-none border-none px-2"
+                    />
+                    {(salesStartDate || salesEndDate) && (
+                      <button
+                        onClick={() => {
+                          setSalesStartDate("");
+                          setSalesEndDate("");
+                        }}
+                        className="p-1.5 bg-red-100 dark:bg-red-900/30 text-red-600 rounded-lg hover:bg-red-200 transition-all active:scale-90"
+                        title="Réinitialiser"
+                      >
+                        <X size={14} />
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mr-1">Raccourcis :</span>
                     <button
                       onClick={() => {
-                        setSalesStartDate("");
-                        setSalesEndDate("");
+                        const today = new Date().toISOString().split("T")[0];
+                        setSalesStartDate(today);
+                        setSalesEndDate(today);
                       }}
-                      className="p-1.5 bg-red-100 dark:bg-red-900/30 text-red-600 rounded-lg hover:bg-red-200 transition-all active:scale-90"
-                      title="Réinitialiser"
+                      className="px-2 py-0.5 text-[10px] font-bold bg-white/10 hover:bg-white/20 dark:bg-gray-700/60 text-gray-700 dark:text-gray-200 rounded-lg transition-all"
                     >
-                      <X size={14} />
+                      Aujourd'hui
                     </button>
-                  )}
+                    <button
+                      onClick={() => {
+                        const now = new Date();
+                        const yest = new Date(now);
+                        yest.setDate(yest.getDate() - 1);
+                        const yestStr = yest.toISOString().split("T")[0];
+                        setSalesStartDate(yestStr);
+                        setSalesEndDate(yestStr);
+                      }}
+                      className="px-2 py-0.5 text-[10px] font-bold bg-white/10 hover:bg-white/20 dark:bg-gray-700/60 text-gray-700 dark:text-gray-200 rounded-lg transition-all"
+                    >
+                      Hier
+                    </button>
+                    <button
+                      onClick={() => {
+                        const now = new Date();
+                        const start = new Date(now);
+                        start.setDate(start.getDate() - 6);
+                        setSalesStartDate(start.toISOString().split("T")[0]);
+                        setSalesEndDate(now.toISOString().split("T")[0]);
+                      }}
+                      className="px-2 py-0.5 text-[10px] font-bold bg-white/10 hover:bg-white/20 dark:bg-gray-700/60 text-gray-700 dark:text-gray-200 rounded-lg transition-all"
+                    >
+                      7 jours
+                    </button>
+                    <button
+                      onClick={() => {
+                        const now = new Date();
+                        const start = new Date(now.getFullYear(), now.getMonth(), 1);
+                        setSalesStartDate(start.toISOString().split("T")[0]);
+                        setSalesEndDate(now.toISOString().split("T")[0]);
+                      }}
+                      className="px-2 py-0.5 text-[10px] font-bold bg-white/10 hover:bg-white/20 dark:bg-gray-700/60 text-gray-700 dark:text-gray-200 rounded-lg transition-all"
+                    >
+                      Ce mois
+                    </button>
+                  </div>
                 </div>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 mb-10">
@@ -9946,19 +10582,58 @@ export const BusinessDashboard: React.FC<Props> = ({
               </div>
             </div>
 
-            <div className="glass p-8 rounded-[32px] border border-white/20 dark:border-white/5 shadow-2xl">
-              <h3 className="font-display font-black text-xl text-gray-900 dark:text-white mb-8 flex items-center uppercase tracking-tight">
-                <Package
-                  size={24}
-                  className="mr-3 text-brand-600 drop-shadow-[0_0_8px_rgba(225,29,72,0.4)]"
-                />{" "}
-                Alertes stock
-              </h3>
+            <div className="glass p-8 rounded-[32px] border border-white/20 dark:border-white/5 shadow-2xl flex flex-col">
+              <div className="flex flex-col sm:flex-row justify-between sm:items-center mb-6 gap-3">
+                <h3 className="font-display font-black text-xl text-gray-900 dark:text-white flex items-center uppercase tracking-tight">
+                  <Package
+                    size={24}
+                    className="mr-3 text-brand-600 drop-shadow-[0_0_8px_rgba(225,29,72,0.4)]"
+                  />{" "}
+                  Inventaire & Stock
+                </h3>
+
+                <span className="text-[11px] font-bold text-gray-400 bg-white/10 dark:bg-black/20 px-2.5 py-1 rounded-xl self-start sm:self-auto">
+                  {filteredInventory.length} article{filteredInventory.length > 1 ? "s" : ""}
+                </span>
+              </div>
+
+              {/* Barre de recherche et filtre de stock */}
+              <div className="space-y-2.5 mb-6">
+                <div className="relative w-full">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={14} />
+                  <input
+                    type="text"
+                    value={inventorySearchQuery}
+                    onChange={(e) => setInventorySearchQuery(e.target.value)}
+                    placeholder="Rechercher par nom, catégorie..."
+                    className="w-full pl-9 pr-8 py-2 bg-white/10 dark:bg-black/20 border border-white/10 rounded-xl text-xs font-bold text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:border-brand-500"
+                  />
+                  {inventorySearchQuery && (
+                    <button
+                      onClick={() => setInventorySearchQuery("")}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-200"
+                    >
+                      <X size={12} />
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between gap-2">
+                  <select
+                    value={inventoryStockFilter}
+                    onChange={(e) => setInventoryStockFilter(e.target.value as any)}
+                    className="w-full bg-white/10 dark:bg-black/20 border border-white/10 rounded-xl px-2.5 py-1.5 text-xs font-bold text-gray-800 dark:text-gray-200 outline-none"
+                  >
+                    <option value="all" className="dark:bg-gray-800">Tous les produits</option>
+                    <option value="low_stock" className="dark:bg-gray-800">Stock critique (≤ Seuil)</option>
+                    <option value="out_of_stock" className="dark:bg-gray-800">Rupture de stock (0)</option>
+                    <option value="in_stock" className="dark:bg-gray-800">En stock suffisant</option>
+                  </select>
+                </div>
+              </div>
+
               <div className="space-y-4 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
-                {restaurant.menu
-                  .filter((item) => item.stock !== undefined)
-                  .sort((a, b) => (a.stock || 0) - (b.stock || 0))
-                  .map((item) => {
+                {filteredInventory.map((item) => {
                     const threshold = item.lowStockThreshold || 5;
                     const isLowStock = item.stock! <= threshold;
                     return (
@@ -10033,13 +10708,35 @@ export const BusinessDashboard: React.FC<Props> = ({
           </div>
 
           <div className="bg-white dark:bg-gray-800/85 p-8 rounded-[32px] shadow-[0_15px_50px_-15px_rgba(0,0,0,0.06)] dark:shadow-[0_20px_55px_rgba(0,0,0,0.35)] hover:shadow-[0_25px_60px_-12px_rgba(0,0,0,0.1)] transition-all duration-300 mt-12">
-            <h3 className="font-display font-black text-xl text-gray-900 dark:text-white mb-8 flex items-center uppercase tracking-tight">
-              <Receipt
-                size={24}
-                className="mr-3 text-brand-650 drop-shadow-[0_0_8px_rgba(225,29,72,0.2)]"
-              />{" "}
-              Historique Transactionnelle
-            </h3>
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-4">
+              <h3 className="font-display font-black text-xl text-gray-900 dark:text-white flex items-center uppercase tracking-tight">
+                <Receipt
+                  size={24}
+                  className="mr-3 text-brand-650 drop-shadow-[0_0_8px_rgba(225,29,72,0.2)]"
+                />{" "}
+                Historique Transactionnelle
+              </h3>
+
+              <div className="relative w-full sm:w-80">
+                <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" size={15} />
+                <input
+                  type="text"
+                  value={salesSearchQuery}
+                  onChange={(e) => setSalesSearchQuery(e.target.value)}
+                  placeholder="Rechercher par client, ID, canal..."
+                  className="w-full pl-10 pr-9 py-2 bg-gray-50 dark:bg-gray-700/60 border border-gray-200 dark:border-gray-600 rounded-2xl text-xs font-bold text-gray-800 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-brand-500"
+                />
+                {salesSearchQuery && (
+                  <button
+                    onClick={() => setSalesSearchQuery("")}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+            </div>
+
             <div className="overflow-x-auto no-scrollbar">
               <table className="w-full text-left font-sans">
                 <thead>
@@ -10065,8 +10762,8 @@ export const BusinessDashboard: React.FC<Props> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/5">
-                  {filteredOrders.length > 0 ? (
-                    filteredOrders.map((order) => (
+                  {transactionOrders.length > 0 ? (
+                    transactionOrders.map((order) => (
                       <tr
                         key={order.id}
                         className="group hover:bg-white/5 transition-colors"
@@ -11724,6 +12421,125 @@ export const BusinessDashboard: React.FC<Props> = ({
     );
   };
 
+  const renderCancelSubscriptionModal = () => {
+    if (!isCancelSubModalOpen) return null;
+
+    const handleConfirmCancel = async () => {
+      setIsCancellingSub(true);
+      try {
+        const hasActivePeriod = restaurant.subscriptionEndDate && new Date(restaurant.subscriptionEndDate).getTime() > new Date().getTime();
+
+        const updateData = hasActivePeriod ? {
+          subscription_status: "cancelled"
+        } : {
+          subscription_tier: "free",
+          subscription_status: "active",
+          subscription_end_date: null
+        };
+
+        const { error } = await supabase
+          .from("restaurants")
+          .update(updateData)
+          .eq("id", restaurant.id);
+
+        if (error) throw error;
+
+        if (hasActivePeriod) {
+          const formattedDate = new Date(restaurant.subscriptionEndDate!).toLocaleDateString('fr-FR');
+          toast.info(`Demande de résiliation enregistrée. Votre forfait restera actif jusqu'au ${formattedDate}. Vous pouvez réactiver votre abonnement à tout moment !`, { icon: "ℹ️" });
+          onUpdateRestaurant({
+            ...restaurant,
+            subscriptionStatus: "cancelled"
+          });
+        } else {
+          toast.success("Votre abonnement a été annulé avec succès. Vous êtes repassé au forfait Gratuit.", { icon: "✨" });
+          onUpdateRestaurant({
+            ...restaurant,
+            subscriptionTier: "free",
+            subscriptionStatus: "active",
+            subscriptionEndDate: undefined
+          });
+        }
+
+        setIsCancelSubModalOpen(false);
+      } catch (err) {
+        console.error("Error cancelling subscription:", err);
+        toast.error("Erreur lors de l'annulation de l'abonnement.");
+      } finally {
+        setIsCancellingSub(false);
+      }
+    };
+
+    return (
+      <div className="fixed inset-0 z-[999] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+        <div className="bg-white dark:bg-gray-800 rounded-3xl max-w-md w-full p-6 shadow-2xl border border-gray-100 dark:border-gray-700 animate-in zoom-in-95 duration-200">
+          <div className="flex items-center justify-between pb-4 border-b border-gray-100 dark:border-gray-700">
+            <div className="flex items-center space-x-3">
+              <div className="p-2.5 bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-2xl">
+                <AlertTriangle size={22} />
+              </div>
+              <div>
+                <h3 className="font-bold text-gray-900 dark:text-white text-base">
+                  Résiliation d'abonnement
+                </h3>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  Confirmation de passage au forfait Gratuit
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setIsCancelSubModalOpen(false)}
+              className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+            >
+              <X size={18} />
+            </button>
+          </div>
+
+          <div className="py-5 space-y-4 text-sm text-gray-600 dark:text-gray-300">
+            <p className="font-medium leading-relaxed">
+              Êtes-vous sûr de vouloir résilier votre abonnement <strong className="text-gray-900 dark:text-white uppercase font-black">{restaurant.subscriptionTier || 'Payant'}</strong> et repasser au forfait <strong className="text-brand-600 dark:text-brand-400 font-bold">Gratuit</strong> ?
+            </p>
+
+            <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/40 p-3.5 rounded-2xl text-xs text-amber-800 dark:text-amber-300 leading-relaxed space-y-1">
+              <p className="font-bold flex items-center">
+                <Lock size={14} className="mr-1.5 shrink-0" /> Note d'information
+              </p>
+              <p>
+                Votre forfait actuel sera désactivé et votre établissement repassera immédiatement au forfait Gratuit standard sans aucun frais.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-100 dark:border-gray-700">
+            <button
+              type="button"
+              onClick={() => setIsCancelSubModalOpen(false)}
+              disabled={isCancellingSub}
+              className="px-4 py-2.5 rounded-xl text-xs font-bold text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+            >
+              Conserver mon abonnement
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirmCancel}
+              disabled={isCancellingSub}
+              className="px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider text-white bg-red-600 hover:bg-red-700 active:scale-95 shadow-lg shadow-red-600/20 transition-all flex items-center space-x-2"
+            >
+              {isCancellingSub ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-1.5" />
+                  <span>Résiliation...</span>
+                </>
+              ) : (
+                <span>Confirmer l'annulation</span>
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   if (!restaurant) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-black p-4">
@@ -11746,6 +12562,7 @@ export const BusinessDashboard: React.FC<Props> = ({
         <div className="pointer-events-none absolute -bottom-40 left-1/3 w-96 h-96 rounded-full bg-blue-500/5 dark:bg-blue-500/5 blur-[120px]" />
         {renderNotificationsModal()}
         {renderEmailModal()}
+        {renderCancelSubscriptionModal()}
 
         {showNotification && (
           <div
@@ -12321,7 +13138,7 @@ export const BusinessDashboard: React.FC<Props> = ({
                           <Landmark size={20} />
                         </div>
                         <div>
-                          <p className="text-sm font-bold text-gray-900 dark:text-white">Paiement Sécurisé KPay</p>
+                          <p className="text-sm font-bold text-gray-900 dark:text-white">Paiement Mobile Sécurisé</p>
                           <p className="text-[10px] text-gray-500">Validation automatique</p>
                         </div>
                       </div>
@@ -12335,7 +13152,7 @@ export const BusinessDashboard: React.FC<Props> = ({
                       <div className="mb-4 p-4 bg-blue-50 dark:bg-blue-900/10 border border-blue-100 dark:border-blue-800 rounded-xl flex items-start gap-3">
                         <Info className="text-blue-600 mt-0.5" size={16} />
                         <p className="text-[10px] text-blue-800 dark:text-blue-300 leading-relaxed font-medium">
-                          L'activation est instantanée dès confirmation de KPay. Assurez-vous d'avoir le montant disponible sur votre compte.
+                          L'activation est instantanée dès confirmation de votre paiement. Assurez-vous d'avoir le montant disponible sur votre compte.
                         </p>
                       </div>
 
@@ -12425,6 +13242,178 @@ export const BusinessDashboard: React.FC<Props> = ({
           </div>
         )}
         
+        {/* DISH REVIEWS MODAL */}
+        {selectedMealForReviewsModal && (
+          <div className="fixed inset-0 z-[1100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+            <div className="bg-white dark:bg-gray-800 rounded-3xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden border border-gray-100 dark:border-gray-700 animate-in zoom-in-95 duration-200">
+              {/* Modal Header */}
+              <div className="p-5 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center bg-gray-50/50 dark:bg-gray-800/80">
+                <div className="flex items-center space-x-3">
+                  <img
+                    src={selectedMealForReviewsModal.image}
+                    alt={selectedMealForReviewsModal.name}
+                    className="w-12 h-12 rounded-2xl object-cover border border-gray-200 dark:border-gray-700 shrink-0"
+                  />
+                  <div>
+                    <div className="flex items-center space-x-2">
+                      <h3 className="font-bold text-base text-gray-900 dark:text-white">
+                        {selectedMealForReviewsModal.name}
+                      </h3>
+                      {selectedMealForReviewsModal.category && (
+                        <span className="px-2 py-0.5 text-[10px] font-bold bg-brand-50 dark:bg-brand-900/30 text-brand-600 dark:text-brand-400 rounded-lg capitalize">
+                          {selectedMealForReviewsModal.category}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      Avis et évaluations déposés par vos clients sur ce plat
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setSelectedMealForReviewsModal(null)}
+                  className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* Modal Content */}
+              <div className="p-6 overflow-y-auto space-y-6 custom-scrollbar">
+                {(() => {
+                  const itemRev = mealReviews.filter((r) => r.menu_item_id === selectedMealForReviewsModal.id);
+                  const avg = itemRev.length > 0
+                    ? (itemRev.reduce((s, r) => s + r.rating, 0) / itemRev.length).toFixed(1)
+                    : "0.0";
+
+                  return (
+                    <>
+                      {/* Summary Banner */}
+                      <div className="bg-gradient-to-br from-amber-500/10 via-amber-500/5 to-transparent p-5 rounded-2xl border border-amber-200/50 dark:border-amber-900/30 flex flex-col sm:flex-row items-center justify-between gap-4">
+                        <div className="text-center sm:text-left">
+                          <div className="text-3xl font-black text-amber-600 dark:text-amber-400 flex items-center justify-center sm:justify-start">
+                            {avg} <span className="text-lg text-gray-400 font-bold ml-1">/ 5</span>
+                          </div>
+                          <div className="flex items-center text-amber-400 my-1 justify-center sm:justify-start">
+                            {[1, 2, 3, 4, 5].map((star) => (
+                              <Star
+                                key={star}
+                                size={16}
+                                fill={Number(avg) >= star ? "currentColor" : "none"}
+                              />
+                            ))}
+                          </div>
+                          <p className="text-xs font-bold text-gray-500 dark:text-gray-400">
+                            Basé sur {itemRev.length} avis client{itemRev.length > 1 ? "s" : ""}
+                          </p>
+                        </div>
+
+                        {/* Star breakdown */}
+                        <div className="w-full sm:w-48 space-y-1">
+                          {[5, 4, 3, 2, 1].map((star) => {
+                            const count = itemRev.filter((r) => r.rating === star).length;
+                            const pct = itemRev.length > 0 ? (count / itemRev.length) * 100 : 0;
+                            return (
+                              <div key={star} className="flex items-center text-[10px] font-bold space-x-2">
+                                <span className="w-4 text-gray-500">{star}★</span>
+                                <div className="flex-1 h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                                  <div
+                                    className="h-full bg-amber-500 rounded-full transition-all"
+                                    style={{ width: `${pct}%` }}
+                                  />
+                                </div>
+                                <span className="w-6 text-right text-gray-400">{count}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Review Items */}
+                      <div className="space-y-3">
+                        <h4 className="font-bold text-xs uppercase tracking-wider text-gray-400 dark:text-gray-500">
+                          Commentaires des clients ({itemRev.length})
+                        </h4>
+
+                        {itemRev.length > 0 ? (
+                          itemRev.map((rev) => {
+                            const authorName = rev.profiles?.full_name || rev.profiles?.email?.split('@')[0] || "Client";
+                            return (
+                              <div
+                                key={rev.id}
+                                className="p-4 bg-gray-50 dark:bg-gray-700/40 rounded-2xl border border-gray-100 dark:border-gray-700 space-y-2"
+                              >
+                                <div className="flex justify-between items-start">
+                                  <div className="flex items-center space-x-2.5">
+                                    <div className="w-8 h-8 rounded-full bg-brand-100 dark:bg-brand-900/40 text-brand-600 dark:text-brand-400 font-bold text-xs flex items-center justify-center">
+                                      {authorName.charAt(0).toUpperCase()}
+                                    </div>
+                                    <div>
+                                      <p className="font-bold text-xs text-gray-900 dark:text-white">
+                                        {authorName}
+                                      </p>
+                                      <div className="flex items-center text-amber-400">
+                                        {[1, 2, 3, 4, 5].map((st) => (
+                                          <Star
+                                            key={st}
+                                            size={12}
+                                            fill={rev.rating >= st ? "currentColor" : "none"}
+                                          />
+                                        ))}
+                                        <span className="text-[10px] text-gray-400 ml-2">
+                                          {new Date(rev.created_at).toLocaleDateString()}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  {user.role === "business" && (
+                                    <button
+                                      onClick={() => handleDeleteMealReview(rev.id, selectedMealForReviewsModal.id)}
+                                      className="p-1 text-gray-400 hover:text-red-500 rounded-lg hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors"
+                                      title="Supprimer cet avis"
+                                    >
+                                      <Trash2 size={14} />
+                                    </button>
+                                  )}
+                                </div>
+
+                                <p className="text-xs text-gray-700 dark:text-gray-300 italic bg-white dark:bg-gray-800/80 p-3 rounded-xl border border-gray-100 dark:border-gray-700/50">
+                                  "{rev.comment || "Aucun commentaire écrit."}"
+                                </p>
+                              </div>
+                            );
+                          })
+                        ) : (
+                          <div className="py-12 text-center bg-gray-50 dark:bg-gray-700/30 rounded-2xl border border-dashed border-gray-200 dark:border-gray-700">
+                            <Utensils className="mx-auto h-8 w-8 text-gray-300 dark:text-gray-600 mb-2" />
+                            <p className="text-xs font-bold text-gray-500 dark:text-gray-400">
+                              Aucun avis déposé sur ce plat pour le moment.
+                            </p>
+                            <p className="text-[11px] text-gray-400 mt-0.5">
+                              Les évaluations de vos clients s'afficheront ici au fur et à mesure.
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+
+              {/* Modal Footer */}
+              <div className="p-4 border-t border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-800/80 flex justify-end">
+                <button
+                  onClick={() => setSelectedMealForReviewsModal(null)}
+                  className="px-5 py-2.5 bg-gray-900 text-white dark:bg-white dark:text-gray-900 font-bold text-xs rounded-xl hover:opacity-90 transition-opacity"
+                >
+                  Fermer
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* IMAGE EXPANSION MODAL */}
         {expandedImage && (
           <div 

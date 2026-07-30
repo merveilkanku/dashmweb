@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { CheckCircle2, XCircle, AlertCircle, ArrowLeft, Landmark, Loader2 } from 'lucide-react';
+import { CheckCircle2, XCircle, AlertCircle, ArrowLeft, Landmark, Loader2, FileText } from 'lucide-react';
 import { motion } from 'motion/react';
 import { supabase } from '../lib/supabase';
+import { downloadOrderInvoicePDF } from '../utils/invoiceGenerator';
 
 interface Props {
   status: 'success' | 'cancel' | 'failed';
@@ -12,6 +13,7 @@ export const PaymentResult: React.FC<Props> = ({ status, onReturn }) => {
   const [isActivating, setIsActivating] = useState(status === 'success');
   const [activationError, setActivationError] = useState<string | null>(null);
   const [activatedPlan, setActivatedPlan] = useState<string | null>(null);
+  const [currentOrder, setCurrentOrder] = useState<any | null>(null);
 
   useEffect(() => {
     if (status !== 'success') return;
@@ -190,6 +192,7 @@ export const PaymentResult: React.FC<Props> = ({ status, onReturn }) => {
           }
 
           if (order) {
+            setCurrentOrder(order);
             let updatedItems = order.items;
             if (Array.isArray(updatedItems)) {
               updatedItems = updatedItems.map((item: any, idx: number) => {
@@ -296,6 +299,15 @@ export const PaymentResult: React.FC<Props> = ({ status, onReturn }) => {
           </div>
 
           <div className="flex flex-col gap-3">
+            {status === 'success' && currentOrder && (
+              <button
+                onClick={() => downloadOrderInvoicePDF(currentOrder)}
+                className="w-full py-3.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl shadow-md transition-all flex items-center justify-center space-x-2 active:scale-95"
+              >
+                <FileText size={18} />
+                <span>Télécharger la facture PDF</span>
+              </button>
+            )}
             <button
               onClick={onReturn}
               className={`w-full py-4 rounded-xl text-white font-bold shadow-lg transition-all transform active:scale-95 ${btnColor}`}
@@ -304,7 +316,7 @@ export const PaymentResult: React.FC<Props> = ({ status, onReturn }) => {
             </button>
             <div className="flex items-center justify-center gap-2 text-gray-400">
                 <Landmark size={14} />
-                <span className="text-[10px] font-bold uppercase tracking-widest">Sécurisé par KPay</span>
+                <span className="text-[10px] font-bold uppercase tracking-widest">Sécurisé par DashMeals Pay</span>
             </div>
           </div>
         </div>

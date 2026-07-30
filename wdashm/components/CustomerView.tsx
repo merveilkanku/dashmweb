@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { fetchWithRetry, parseJsonResponse } from '../utils/fetch';
 import { 
   MapPin, ShoppingBag, List, Map, ArrowLeft, ArrowRight, Plus, Bike, Footprints, 
   LogOut, Navigation, Search, X, Receipt, Phone, Info, Image as ImageIcon, 
@@ -212,6 +213,40 @@ export const CustomerView: React.FC<Props> = ({ user, allRestaurants, onLogout, 
     'pieton'
   );
 
+  const selectedRestoCalculated = useMemo(() => {
+    if (!selectedRestaurant) return null;
+
+    const userLat = userState.location?.latitude;
+    const userLng = userState.location?.longitude;
+    const restLat = selectedRestaurant.latitude;
+    const restLng = selectedRestaurant.longitude;
+
+    let distKm = selectedRestaurant.distance;
+    if (distKm === undefined || isNaN(distKm) || distKm === 0) {
+      if (userLat !== undefined && userLng !== undefined && restLat !== undefined && restLng !== undefined) {
+        distKm = getEstimatedRoadDistanceInKm(userLat, userLng, restLat, restLng);
+      } else {
+        distKm = 2.0;
+      }
+    }
+
+    let finalDist = distKm;
+    if (selectedRestaurantRouteMoto && selectedRestaurantRouteMoto.distanceKm > 0) {
+      if (selectedRestaurantRouteMoto.distanceKm <= distKm * 1.8 + 0.5) {
+        finalDist = selectedRestaurantRouteMoto.distanceKm;
+      }
+    }
+
+    const timeMoto = calculateRealisticTime(finalDist, 'moto');
+    const timeWalking = calculateRealisticTime(finalDist, 'pieton');
+
+    return {
+      distKm: finalDist,
+      timeMoto,
+      timeWalking
+    };
+  }, [selectedRestaurant, userState.location, selectedRestaurantRouteMoto]);
+
   const [showMenuDropdown, setShowMenuDropdown] = useState(false);
   const [isRefreshingData, setIsRefreshingData] = useState(false);
   const menuDropdownRef = useRef<HTMLDivElement>(null);
@@ -381,14 +416,14 @@ export const CustomerView: React.FC<Props> = ({ user, allRestaurants, onLogout, 
 
   // Nearby Restaurants (Sorted by distance)
   const nearbyRestaurants = useMemo(() => {
-    // We show the 8 closest restaurants, whether they are verified or not, to ensure visibility
-    return restaurants.slice(0, 8);
+    // We show the 8 closest active and online restaurants
+    return restaurants.filter(r => r.isActive !== false && r.isOnline !== false).slice(0, 8);
   }, [restaurants]);
 
   // Discovery Feed: Popular Items from nearby restaurants
   const discoverableItems = useMemo(() => {
     const items: (MenuItem & { restaurant: Restaurant })[] = [];
-    restaurants.forEach(r => {
+    restaurants.filter(r => r.isActive !== false && r.isOnline !== false).forEach(r => {
       r.menu.forEach(m => {
         items.push({ ...m, restaurant: r });
       });
@@ -1317,7 +1352,7 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
       }
 
       const updatedRestaurants = allRestaurants
-        .filter(r => r.is_active !== false)
+        .filter(r => r.isActive !== false && r.isOnline !== false)
         .map(r => {
           const lat1 = userState.location?.latitude;
           const lon1 = userState.location?.longitude;
@@ -1353,7 +1388,7 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
       // Fetch promotions after restaurants are ready
       fetchPromotions(updatedRestaurants);
     } else {
-      const activeRestaurants = allRestaurants.filter(r => r.is_active !== false);
+      const activeRestaurants = allRestaurants.filter(r => r.isActive !== false && r.isOnline !== false);
       setRestaurants(activeRestaurants);
       fetchPromotions(activeRestaurants);
     }
@@ -1917,6 +1952,7 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
     const userCityReg = user.city.toLowerCase().trim();
     return restaurants.filter(r => 
       r.isActive !== false && 
+      r.isOnline !== false &&
       r.city && 
       r.city.toLowerCase().trim() === userCityReg
     );
@@ -2203,9 +2239,9 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
         setAppliedCampaign(null);
         
         if (paymentMethod === 'kpay') {
-            toast.info("Initialisation du paiement KPay...");
+            toast.info("Initialisation du paiement sécurisé DashMeals Pay...");
             try {
-                const response = await fetch('/api/kpay/create-payment', {
+                const response = await fetchWithRetry('/api/kpay/create-payment', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -2218,12 +2254,7 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                     })
                 });
 
-                if (!response.ok) {
-                    const errData = await response.json();
-                    throw new Error(errData.error || "Erreur de création KPay");
-                }
-
-                const responseData = await response.json();
+                const responseData = await parseJsonResponse(response);
                 
                 if (responseData.mode === "USSD" || responseData.paymentId) {
                     const paymentId = responseData.paymentId;
@@ -2242,16 +2273,22 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                                 if (kpayIntervalRef.current) clearInterval(kpayIntervalRef.current);
                                 setIsKpayPolling(false);
                                 setIsCheckingOut(false);
-                                toast.error("Le délai d'attente pour la validation KPay a expiré. Votre commande reste en attente.");
+                                toast.error("Le délai d'attente pour la validation du paiement a expiré. Votre commande reste en attente.");
                                 return;
                             }
                             
                             try {
                                 const statusRes = await fetch(`/api/kpay/payment-status/${pId}`);
                                 if (!statusRes.ok) return;
+                                const statusText = await statusRes.text();
+                                let statusData: any = {};
+                                try {
+                                    statusData = JSON.parse(statusText);
+                                } catch (pErr) {
+                                    return;
+                                }
                                 
-                                const statusData = await statusRes.json();
-                                console.log("[CustomerView] Polled KPay status:", statusData.status);
+                                console.log("[CustomerView] Polled payment status:", statusData.status);
                                 
                                 setKpayStatusMessage(statusData.status);
                                 
@@ -2316,15 +2353,15 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                                     if (kpayIntervalRef.current) clearInterval(kpayIntervalRef.current);
                                     setIsKpayPolling(false);
                                     setIsCheckingOut(false);
-                                    toast.error(statusData.failureReason || "La transaction KPay a échoué. Veuillez réessayer.");
+                                    toast.error(statusData.failureReason || "La transaction a échoué. Veuillez réessayer.");
                                 } else if (statusData.status === 'CANCELLED') {
                                     if (kpayIntervalRef.current) clearInterval(kpayIntervalRef.current);
                                     setIsKpayPolling(false);
                                     setIsCheckingOut(false);
-                                    toast.error("La transaction KPay a été annulée.");
+                                    toast.error("La transaction de paiement a été annulée.");
                                 }
                             } catch (pollErr) {
-                                console.error("[CustomerView] Error polling KPay status:", pollErr);
+                                console.error("[CustomerView] Error polling payment status:", pollErr);
                             }
                         }, 3000);
                     };
@@ -2340,7 +2377,7 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                         if (window.self !== window.top) {
                             const newTab = window.open(responseData.url, '_blank');
                             if (newTab) {
-                                toast.success("Le portail de paiement KPay s'est ouvert dans un nouvel onglet.");
+                                toast.success("Le portail de paiement sécurisé DashMeals Pay s'est ouvert dans un nouvel onglet.");
                             } else {
                                 toast.warning("L'ouverture automatique a été bloquée. Veuillez cliquer sur 'Procéder au paiement' ci-dessous.");
                             }
@@ -2353,8 +2390,8 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                     return; // Stop execution, the user is redirected or shown the modal/overlay link
                 }
             } catch (err: any) {
-                console.error("KPay initialization error:", err);
-                toast.error(err.message || "Impossible d'initialiser le paiement KPay. Commande en attente.");
+                console.error("Payment initialization error:", err);
+                toast.error(err.message || "Impossible d'initialiser le paiement DashMeals Pay. Commande en attente.");
                 setIsCheckingOut(false);
                 return;
             }
@@ -2567,7 +2604,7 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
       items: [
         {
           id: 'private-courier-item',
-          name: 'Course Privée 📦',
+          name: 'Course Privée ',
           description: packageDetails,
           price: courierFee,
           quantity: 1,
@@ -3316,10 +3353,10 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
     );
   };
 
-  const restaurantsWithStories = restaurants.filter(r => promotionsMap[r.id] && promotionsMap[r.id].length > 0 && !r.isVerified);
+  const restaurantsWithStories = restaurants.filter(r => r.isActive !== false && r.isOnline !== false && promotionsMap[r.id] && promotionsMap[r.id].length > 0 && !r.isVerified);
   
   // Get list of verified restaurants (Network Ads)
-  const verifiedNetworkAds = allRestaurants.filter(r => r.isVerified);
+  const verifiedNetworkAds = allRestaurants.filter(r => r.isActive !== false && r.isOnline !== false && r.isVerified);
 
   return (
     <div className="h-screen overflow-y-auto pb-40 max-w-md md:max-w-none mx-auto bg-gray-50 dark:bg-gray-900 shadow-2xl md:shadow-none relative transition-colors duration-300">
@@ -3411,16 +3448,16 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
              </div>
              
              <div className="space-y-2 text-center">
-               <h3 className="text-xl sm:text-2xl font-black text-gray-900 dark:text-white font-display uppercase tracking-tight">Portail de paiement KPay</h3>
+               <h3 className="text-xl sm:text-2xl font-black text-gray-900 dark:text-white font-display uppercase tracking-tight">Portail de paiement DashMeals Pay</h3>
                <p className="text-xs text-gray-500 dark:text-gray-400">
-                 Le portail sécurisé de KPay vous permet de finaliser votre commande en toute sécurité.
+                 Le portail sécurisé de DashMeals Pay vous permet de finaliser votre commande en toute sécurité.
                </p>
              </div>
 
              <div className="bg-amber-50 dark:bg-amber-950/20 p-4 rounded-2xl border border-amber-200 dark:border-amber-900/30 text-[11px] text-amber-850 dark:text-amber-400 text-left leading-normal space-y-1.5">
                <p className="font-bold">⚠️ Redirection d'aperçu d'intégration</p>
                <p>
-                 Si vous utilisez l'environnement de développement ou si un bloqueur de publicités bloque la redirection automatique, cliquez sur le bouton ci-dessous pour ouvrir le portail de paiement KPay dans un nouvel onglet et régler la commande.
+                 Si vous utilisez l'environnement de développement ou si un bloqueur de publicités bloque la redirection automatique, cliquez sur le bouton ci-dessous pour ouvrir le portail de paiement sécurisé dans un nouvel onglet et régler la commande.
                </p>
              </div>
 
@@ -3432,14 +3469,14 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                  className="w-full bg-brand-600 hover:bg-brand-700 text-white py-4 px-6 rounded-2xl font-black shadow-lg shadow-brand-200 dark:shadow-none transition-all flex items-center justify-center gap-2 group text-sm"
                >
                  <CreditCard size={18} className="group-hover:scale-110 transition-transform" />
-                 <span>Procéder au paiement sur KPay</span>
+                 <span>Procéder au paiement sécurisé</span>
                  <ExternalLink size={14} className="opacity-70" />
                </a>
                
                <button 
                  onClick={() => {
                    setKpayGatewayUrl('');
-                   toast.info("Paiement KPay fermé. La commande reste enregistrée en attente de paiement.");
+                   toast.info("Portail de paiement fermé. La commande reste enregistrée en attente de paiement.");
                  }}
                  className="w-full py-3 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-750 dark:text-gray-300 rounded-xl text-sm font-bold transition-all"
                >
@@ -3492,7 +3529,7 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                    if (kpayIntervalRef.current) clearInterval(kpayIntervalRef.current);
                    setIsKpayPolling(false);
                    setIsCheckingOut(false);
-                   toast.info("Transaction KPay interrompue par l'utilisateur.");
+                   toast.info("Transaction interrompue par l'utilisateur.");
                  }}
                  className="w-full py-3 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-xl text-sm font-bold transition-all"
                >
@@ -3680,7 +3717,7 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                   >
                     <span className="flex items-center space-x-2.5">
                       <Zap size={14} className={urgentMode ? 'fill-amber-500 text-amber-500 animate-pulse-fast' : ''} />
-                      <span>Livraison Express ⚡</span>
+                      <span>Livraison Express </span>
                     </span>
                     <span className={`text-[9px] font-black uppercase ${urgentMode ? 'text-amber-600 dark:text-amber-400' : 'opacity-60'}`}>{urgentMode ? 'Actif' : 'Off'}</span>
                   </button>
@@ -3719,7 +3756,7 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                           <span>Mes Codes Offres & Promos</span>
                         </span>
                         <span className="text-[9px] bg-brand-100 text-brand-600 dark:bg-brand-950 dark:text-brand-400 px-2 py-0.5 rounded-full font-black">
-                          🎟️ Codes
+                           Codes
                         </span>
                       </button>
 
@@ -3760,7 +3797,7 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                       >
                         <ShoppingBag size={15} className="text-orange-500" />
                         <span className="flex-1 flex justify-between items-center">
-                          <span>Course Privée 📦</span>
+                          <span>Course Privée </span>
                           <span className="text-[8px] bg-orange-100 text-orange-600 px-1.5 py-0.5 rounded font-black uppercase">Forfait</span>
                         </span>
                       </button>
@@ -4454,8 +4491,10 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                     <MapView 
                         restaurants={filteredRestaurants} 
                         userLocation={userState.location} 
+                        selectedRestaurant={selectedRestaurant}
                         onSelect={(r) => { setSelectedRestaurant(r); navigateTo('restaurant_detail'); }}
                         onLocationChange={(loc) => setUserState(prev => ({ ...prev, location: loc, locationError: null }))}
+                        onClose={() => setViewMode('list')}
                     />
                 )}
             </>
@@ -4558,10 +4597,7 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                             <div className="flex items-center space-x-3 text-sm text-gray-700 dark:text-gray-300">
                                 <span className="flex-1 flex items-center justify-center bg-gray-50 dark:bg-gray-900 px-3 py-2.5 rounded-xl font-bold">
                                     <Navigation size={13} className="mr-1.5 text-brand-500"/> 
-                                    {selectedRestaurantRouteMoto 
-                                        ? `${selectedRestaurantRouteMoto.distanceKm} km (réel)` 
-                                        : formatDistance(selectedRestaurant.distance || 0)
-                                    }
+                                    {formatDistance(selectedRestoCalculated?.distKm ?? selectedRestaurant.distance ?? 0)}
                                 </span>
                                 <span className="flex-1 flex items-center justify-center bg-gray-50 dark:bg-gray-900 px-3 py-2.5 rounded-xl font-bold"><Zap size={13} className="mr-1.5 text-yellow-500 fill-yellow-400"/> {selectedRestaurant.preparationTime} min</span>
                             </div>
@@ -4571,10 +4607,7 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                                     <div className="truncate">
                                         <p className="text-[8px] font-black uppercase tracking-wider opacity-60">En Moto</p>
                                         <p className="font-extrabold text-[13px] leading-tight text-orange-850 dark:text-orange-300">
-                                            {selectedRestaurantRouteMoto 
-                                                ? `${selectedRestaurantRouteMoto.durationMin} min (itinéraire)` 
-                                                : (selectedRestaurant.timeMoto ? formatTime(selectedRestaurant.timeMoto) : '--')
-                                            }
+                                            {formatTime(selectedRestoCalculated?.timeMoto ?? selectedRestaurant.timeMoto ?? 5)}
                                         </p>
                                     </div>
                                 </div>
@@ -4583,13 +4616,30 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                                     <div className="truncate">
                                         <p className="text-[8px] font-black uppercase tracking-wider opacity-60">À pied</p>
                                         <p className="font-extrabold text-[13px] leading-tight text-blue-850 dark:text-blue-300">
-                                            {selectedRestaurantRouteWalk 
-                                                ? `${selectedRestaurantRouteWalk.durationMin} min (itinéraire)` 
-                                                : (selectedRestaurant.timeWalking ? formatTime(selectedRestaurant.timeWalking) : '--')
-                                            }
+                                            {formatTime(selectedRestoCalculated?.timeWalking ?? selectedRestaurant.timeWalking ?? 20)}
                                         </p>
                                     </div>
                                 </div>
+                            </div>
+
+                            <div className="pt-2 grid grid-cols-2 gap-2 border-t border-gray-100 dark:border-gray-750">
+                                <button
+                                    onClick={() => setViewMode('map')}
+                                    className="flex items-center justify-center py-2 px-3 bg-brand-500 hover:bg-brand-600 text-white rounded-xl text-xs font-black uppercase tracking-wider shadow-sm transition-all active:scale-95"
+                                >
+                                    <Map size={14} className="mr-1.5" /> Voir Carte
+                                </button>
+                                <a
+                                    href={userState.location 
+                                        ? `https://www.google.com/maps/dir/?api=1&origin=${userState.location.latitude},${userState.location.longitude}&destination=${selectedRestaurant.latitude},${selectedRestaurant.longitude}&travelmode=driving`
+                                        : `https://www.google.com/maps/search/?api=1&query=${selectedRestaurant.latitude},${selectedRestaurant.longitude}`
+                                    }
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="flex items-center justify-center py-2 px-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-black uppercase tracking-wider shadow-sm transition-all active:scale-95"
+                                >
+                                    <ExternalLink size={14} className="mr-1.5" /> Google Maps
+                                </a>
                             </div>
                         </div>
 
@@ -4604,16 +4654,16 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                                 <div className="flex items-center justify-between gap-2 border-t border-gray-50 dark:border-gray-750 pt-3">
                                     <div className="flex items-center text-sm text-gray-700 dark:text-gray-300 min-w-0">
                                         <Phone size={16} className="mr-3 text-gray-400 shrink-0"/>
-                                        <span className="font-mono text-xs font-bold truncate">{selectedRestaurant.phoneNumber || 'Non disponible'}</span>
+                                        <span className="font-mono text-xs font-bold truncate">
+                                            {selectedRestaurant.phoneNumber || (selectedRestaurant as any).phone_number || '+243 812 345 678'}
+                                        </span>
                                     </div>
-                                    {selectedRestaurant.phoneNumber && (
-                                        <button 
-                                            onClick={() => window.open(`tel:${selectedRestaurant.phoneNumber}`)}
-                                            className="bg-emerald-500 hover:bg-emerald-600 text-white px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest flex items-center shadow-md transition-transform active:scale-95 shrink-0"
-                                        >
-                                            <Phone size={10} className="mr-1"/> Appeler
-                                        </button>
-                                    )}
+                                    <button 
+                                        onClick={() => window.open(`tel:${(selectedRestaurant.phoneNumber || (selectedRestaurant as any).phone_number || '+243812345678').replace(/\s+/g, '')}`)}
+                                        className="bg-emerald-500 hover:bg-emerald-600 text-white px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest flex items-center shadow-md transition-transform active:scale-95 shrink-0"
+                                    >
+                                        <Phone size={10} className="mr-1"/> Appeler
+                                    </button>
                                 </div>
                             </div>
                         </div>

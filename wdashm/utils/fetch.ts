@@ -31,3 +31,28 @@ export async function fetchWithRetry(
     throw error;
   }
 }
+
+/**
+ * Safely parse JSON from a fetch Response, handling non-JSON / HTML error pages gracefully.
+ */
+export async function parseJsonResponse<T = any>(response: Response): Promise<T> {
+  const text = await response.text();
+  let data: any = {};
+  
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch (parseErr) {
+    console.error('Non-JSON response received:', text.slice(0, 300));
+    if (!response.ok) {
+      throw new Error(`Erreur serveur (${response.status}): ${response.statusText || 'Réponse non JSON'}`);
+    }
+    throw new Error('Le serveur a retourné une réponse au format HTML ou non valide au lieu de JSON.');
+  }
+
+  if (!response.ok) {
+    throw new Error(data.error || data.message || `Erreur serveur (${response.status})`);
+  }
+
+  return data;
+}
+

@@ -19,7 +19,7 @@ export const LegalModal: React.FC<LegalModalProps> = ({ type, onClose, appSettin
       body: `
         1. Acceptation des conditions : En utilisant DashMeals, vous acceptez d'être lié par les présentes conditions.
         2. Service : DashMeals est une plateforme de mise en relation entre clients et restaurateurs en RDC.
-        3. Paiements : Les paiements effectués via KPay ou Mobile Money sont définitifs après confirmation de la livraison.
+        3. Paiements : Les paiements effectués via Mobile Money ou Carte Bancaire sont définitifs après confirmation de la livraison.
         4. Annulation : Toute annulation doit intervenir avant la mise en préparation par le restaurant.
         5. Livraison : Les temps de livraison sont des estimations basées sur le trafic et les conditions météorologiques à Kinshasa.
       `

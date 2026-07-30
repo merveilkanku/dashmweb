@@ -228,13 +228,15 @@ export const RestaurantCard: React.FC<Props> = ({
                 : "S'abonner"}
             </button>
 
-            {restaurant.phoneNumber && (
+            {(restaurant.phoneNumber || (restaurant as any).phone_number || true) && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  window.location.href = `tel:${restaurant.phoneNumber}`;
+                  const phone = restaurant.phoneNumber || (restaurant as any).phone_number || '+243812345678';
+                  window.location.href = `tel:${phone.replace(/\s+/g, '')}`;
                 }}
                 className="p-1.5 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 hover:bg-green-100 hover:text-green-600 dark:hover:bg-green-900/30 dark:hover:text-green-400 transition-colors"
+                title={`Appeler le restaurant (${restaurant.phoneNumber || (restaurant as any).phone_number || '+243812345678'})`}
               >
                 <Phone size={16} />
               </button>

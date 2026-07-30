@@ -5,14 +5,16 @@ import {
   Trash2, AlertTriangle, Database, Type, Sun, Moon, Menu, X, Bell,
   Eye, EyeOff, Download, FileText, Mail, MessageSquare, MessageCircle,
   Settings, UserPlus, UserMinus, ShieldCheck, ShieldAlert, RefreshCw, Bike,
-  CreditCard, Calendar, Edit3
+  CreditCard, Calendar, Edit3, RotateCcw, ArrowUpRight, ChevronUp, ChevronDown,
+  Sliders, Lock, Plus, Check
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { APP_LOGO_URL, MOCK_RESTAURANTS, CITIES_RDC } from '../constants';
 import { formatDualPrice } from '../utils/format';
 import { User, Restaurant, Order, Theme, Language, AppFont, AppSettings, BusinessType } from '../types';
 import { toast } from 'sonner';
-import { sendEmail, sendVerificationStatusEmail, sendSupportReplyEmail } from '../lib/email';
+import { sendEmail, sendVerificationStatusEmail, sendSupportReplyEmail, sendSubscriptionRefundEmail, sendTransactionInvoiceEmail } from '../lib/email';
+import { parseJsonResponse } from '../utils/fetch';
 import { useTranslation } from '../lib/i18n';
 
 const getMockProfiles = () => [
@@ -72,8 +74,8 @@ const getMockTickets = () => [
   {
     id: 'ticket-1',
     user_id: 'client-1',
-    subject: "Problème avec le paiement KPay",
-    message: "Bonjour, j'ai essayé de payer pour ma commande mais l'application a affiché une erreur de réseau au moment de valider le PIN KPay. Pourtant mon compte a été débité.",
+    subject: "Problème avec le paiement DashMeals Pay",
+    message: "Bonjour, j'ai essayé de payer pour ma commande mais l'application a affiché une erreur de réseau au moment de valider le PIN DashMeals Pay. Pourtant mon compte a été débité.",
     status: 'open',
     created_at: new Date(Date.now() - 3600000 * 2).toISOString(),
     profiles: {
@@ -184,11 +186,14 @@ interface Props {
   onRefreshData?: () => void;
 }
 
-type AdminView = 'overview' | 'users' | 'restaurants' | 'publications' | 'verifications' | 'products' | 'support' | 'messages' | 'settings' | 'requests';
+type AdminView = 'overview' | 'users' | 'restaurants' | 'publications' | 'verifications' | 'products' | 'support' | 'messages' | 'settings' | 'requests' | 'subscriptions' | 'subadmins';
 
 export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, setTheme, language, setLanguage, font, setFont, onGoToClient, onRefreshData }) => {
   const t = useTranslation(language || 'fr');
-  const isPrincipalAdmin = user.role === 'superadmin' || user.email?.toLowerCase().trim() === 'irmerveilkanku@gmail.com';
+  const [simulatedSubAdmin, setSimulatedSubAdmin] = useState<any | null>(user?.simulatedSubAdmin || null);
+  const activeSubAdmin = user?.simulatedSubAdmin || simulatedSubAdmin;
+  const isSubAdminActive = Boolean(activeSubAdmin);
+  const isPrincipalAdmin = !isSubAdminActive;
   const fetchStatsRequestId = useRef(0);
   const fetchUsersRequestId = useRef(0);
   const fetchRestaurantsRequestId = useRef(0);
@@ -218,6 +223,330 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
   const [subscriptionModal, setSubscriptionModal] = useState<{ isOpen: boolean; restaurant: Restaurant | null }>({ isOpen: false, restaurant: null });
   const [selectedTier, setSelectedTier] = useState<string>('free');
   const [subEndDate, setSubEndDate] = useState<string>('');
+  const [subFilter, setSubFilter] = useState<string>('all');
+  const [refundModal, setRefundModal] = useState<{ isOpen: boolean; restaurant: Restaurant | null; reason: string; returnToFree: boolean }>({ isOpen: false, restaurant: null, reason: '', returnToFree: true });
+
+  const [subSectionView, setSubSectionView] = useState<'restaurants' | 'kpay_transactions'>('kpay_transactions');
+  const [kpayTxFilter, setKpayTxFilter] = useState<'all' | 'captured' | 'refunded' | 'pending'>('all');
+  const [kpayTypeFilter, setKpayTypeFilter] = useState<'all' | 'subscription' | 'refund' | 'order_payment'>('all');
+  const [selectedKpayTx, setSelectedKpayTx] = useState<any | null>(null);
+  const [invoiceRecipientEmail, setInvoiceRecipientEmail] = useState<string>('');
+  const [isSendingInvoice, setIsSendingInvoice] = useState<boolean>(false);
+
+  const [isBottomMenuOpen, setIsBottomMenuOpen] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (user?.simulatedSubAdmin) {
+      setSimulatedSubAdmin(user.simulatedSubAdmin);
+    }
+  }, [user?.simulatedSubAdmin]);
+
+  const [subAdmins, setSubAdmins] = useState<any[]>(() => {
+    try {
+      const saved = localStorage.getItem('dashmeals_subadmins');
+      if (saved) return JSON.parse(saved);
+    } catch (e) {}
+    return [
+      {
+        id: 'sub-1',
+        full_name: 'Alain Mutombo',
+        email: 'alain.mutombo@dashmeals.cd',
+        phone_number: '+243 890 123 456',
+        password: 'AdminAlain2026!',
+        role_title: 'Gestionnaire Paiements & Abonnements',
+        permissions: ['subscriptions'],
+        is_active: true,
+        created_at: new Date(Date.now() - 3600000 * 240).toISOString()
+      },
+      {
+        id: 'sub-2',
+        full_name: 'Clarisse Tshilomba',
+        email: 'support.clarisse@dashmeals.cd',
+        phone_number: '+243 812 987 654',
+        password: 'ClarissePass2026!',
+        role_title: 'Superviseur Support Client & Tickets',
+        permissions: ['support', 'messages'],
+        is_active: true,
+        created_at: new Date(Date.now() - 3600000 * 120).toISOString()
+      },
+      {
+        id: 'sub-3',
+        full_name: 'Patrick Kabongo',
+        email: 'patrick.kabongo@dashmeals.cd',
+        phone_number: '+243 854 321 098',
+        password: 'PatrickPass2026!',
+        role_title: 'Agent de Conformité & Validation',
+        permissions: ['restaurants', 'verifications'],
+        is_active: true,
+        created_at: new Date(Date.now() - 3600000 * 48).toISOString()
+      }
+    ];
+  });
+
+  const [subAdminModal, setSubAdminModal] = useState<{
+    isOpen: boolean;
+    subAdmin: any | null;
+  }>({ isOpen: false, subAdmin: null });
+
+  const [showSubAdminPassword, setShowSubAdminPassword] = useState(false);
+
+  const [subAdminFormData, setSubAdminFormData] = useState<{
+    full_name: string;
+    email: string;
+    phone_number: string;
+    password: string;
+    role_title: string;
+    permissions: string[];
+  }>({
+    full_name: '',
+    email: '',
+    phone_number: '',
+    password: '',
+    role_title: '',
+    permissions: []
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('dashmeals_subadmins', JSON.stringify(subAdmins));
+      (async () => {
+        try {
+          await supabase.from('app_settings').upsert({ id: 'sub_admins', value: subAdmins });
+        } catch (err) {}
+      })();
+    } catch (e) {}
+  }, [subAdmins]);
+
+  const canAccessView = (view: AdminView): boolean => {
+    if (isPrincipalAdmin) return true;
+    if (!activeSubAdmin) return true;
+    if (view === 'subadmins') return false; // Sub-admins can NEVER view or manage sub-admins
+    if (view === 'overview') return true;
+    if (view === 'requests') {
+      return Boolean(
+        activeSubAdmin.permissions?.includes('verifications') ||
+        activeSubAdmin.permissions?.includes('subscriptions')
+      );
+    }
+    return Boolean(activeSubAdmin.permissions?.includes(view));
+  };
+
+  useEffect(() => {
+    if (!canAccessView(activeView)) {
+      const allViews: AdminView[] = ['overview', 'users', 'restaurants', 'subscriptions', 'publications', 'verifications', 'support', 'messages', 'settings'];
+      const firstAllowed = allViews.find(v => canAccessView(v));
+      if (firstAllowed) {
+        setActiveView(firstAllowed);
+      }
+    }
+  }, [activeView, activeSubAdmin]);
+
+  const handleGenerateRandomPassword = () => {
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%";
+    let generated = "Dash";
+    for (let i = 0; i < 6; i++) {
+      generated += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    generated += "!";
+    setSubAdminFormData(prev => ({ ...prev, password: generated }));
+    toast.info("Nouveau mot de passe généré automatiquement.");
+  };
+
+  const handleOpenSubAdminModal = (subAdmin?: any) => {
+    setShowSubAdminPassword(false);
+    if (subAdmin) {
+      setSubAdminFormData({
+        full_name: subAdmin.full_name || '',
+        email: subAdmin.email || '',
+        phone_number: subAdmin.phone_number || '',
+        password: subAdmin.password || '',
+        role_title: subAdmin.role_title || '',
+        permissions: subAdmin.permissions || []
+      });
+      setSubAdminModal({ isOpen: true, subAdmin });
+    } else {
+      const defaultPass = "DashAdmin" + Math.floor(1000 + Math.random() * 9000) + "!";
+      setSubAdminFormData({
+        full_name: '',
+        email: '',
+        phone_number: '',
+        password: defaultPass,
+        role_title: 'Gestionnaire de Module',
+        permissions: ['subscriptions']
+      });
+      setSubAdminModal({ isOpen: true, subAdmin: null });
+    }
+  };
+
+  const handleSaveSubAdmin = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!subAdminFormData.full_name.trim() || !subAdminFormData.email.trim()) {
+      toast.error("Veuillez remplir au moins le nom complet et l'adresse email.");
+      return;
+    }
+    if (!subAdminFormData.password.trim()) {
+      toast.error("Veuillez définir un mot de passe d'accès pour ce sous-administrateur.");
+      return;
+    }
+    if (subAdminFormData.permissions.length === 0) {
+      toast.error("Veuillez sélectionner au moins une permission pour ce sous-administrateur.");
+      return;
+    }
+
+    if (subAdminModal.subAdmin) {
+      setSubAdmins(prev => prev.map(sa => sa.id === subAdminModal.subAdmin.id ? {
+        ...sa,
+        full_name: subAdminFormData.full_name.trim(),
+        email: subAdminFormData.email.trim(),
+        phone_number: subAdminFormData.phone_number.trim(),
+        password: subAdminFormData.password.trim(),
+        role_title: subAdminFormData.role_title.trim(),
+        permissions: subAdminFormData.permissions
+      } : sa));
+      toast.success(`Sous-admin ${subAdminFormData.full_name} mis à jour avec succès !`);
+    } else {
+      const newSub: any = {
+        id: `sub-${Date.now()}`,
+        full_name: subAdminFormData.full_name.trim(),
+        email: subAdminFormData.email.trim(),
+        phone_number: subAdminFormData.phone_number.trim(),
+        password: subAdminFormData.password.trim(),
+        role_title: subAdminFormData.role_title.trim() || 'Sous-Administrateur',
+        permissions: subAdminFormData.permissions,
+        is_active: true,
+        created_at: new Date().toISOString()
+      };
+      setSubAdmins(prev => [newSub, ...prev]);
+      toast.success(`Sous-admin ${newSub.full_name} créé avec succès !`);
+    }
+
+    setSubAdminModal({ isOpen: false, subAdmin: null });
+  };
+
+  const handleToggleSubAdminStatus = (id: string) => {
+    setSubAdmins(prev => prev.map(sa => sa.id === id ? { ...sa, is_active: !sa.is_active } : sa));
+    toast.info("Statut du sous-administrateur mis à jour.");
+  };
+
+  const handleDeleteSubAdmin = (id: string, name: string) => {
+    if (confirm(`Voulez-vous vraiment supprimer le sous-administrateur "${name}" ?`)) {
+      setSubAdmins(prev => prev.filter(sa => sa.id !== id));
+      if (simulatedSubAdmin?.id === id) {
+        setSimulatedSubAdmin(null);
+      }
+      toast.success(`Sous-administrateur "${name}" supprimé.`);
+    }
+  };
+
+  const togglePermission = (perm: string) => {
+    setSubAdminFormData(prev => {
+      const exists = prev.permissions.includes(perm);
+      return {
+        ...prev,
+        permissions: exists ? prev.permissions.filter(p => p !== perm) : [...prev.permissions, perm]
+      };
+    });
+  };
+
+  const handleSendInvoiceEmail = async (tx: any, targetEmail?: string) => {
+    const emailToSend = (targetEmail || invoiceRecipientEmail || 'partenaire@dashmeals.cd').trim();
+    if (!emailToSend || !emailToSend.includes('@')) {
+      toast.error("Veuillez saisir une adresse email valide pour l'envoi de la facture.");
+      return;
+    }
+
+    setIsSendingInvoice(true);
+    try {
+      const invNum = tx.type === 'refund' 
+        ? `AVOIR-${Math.floor(100000 + Math.random() * 900000)}` 
+        : `FAC-${Math.floor(100000 + Math.random() * 900000)}`;
+
+      await sendTransactionInvoiceEmail({
+        clientEmail: emailToSend,
+        clientName: tx.payerName || tx.restaurantName,
+        restaurantName: tx.restaurantName,
+        invoiceNumber: invNum,
+        invoiceType: tx.type === 'refund' ? 'refund' : tx.type === 'subscription' ? 'subscription' : 'order',
+        grossAmount: Math.abs(tx.grossAmount || 0),
+        feeAmount: Math.abs(tx.feeAmount || 0),
+        netAmount: Math.abs(tx.netAmount || 0),
+        paymentChannel: tx.paymentChannel || 'DashMeals Pay Gateway',
+        txRef: tx.txRef,
+        date: tx.createdAt,
+        notes: tx.notes
+      });
+
+      toast.success(`Facture officielle N° ${invNum} envoyée avec succès à ${emailToSend} !`, { icon: '📧' });
+    } catch (err: any) {
+      console.error('Invoice email error:', err);
+      toast.error("Erreur lors de l'envoi de la facture: " + (err.message || "Échec d'envoi"));
+    } finally {
+      setIsSendingInvoice(false);
+    }
+  };
+
+  const [kpayTransactions, setKpayTransactions] = useState<any[]>(() => {
+    try {
+      const saved = localStorage.getItem('dashmeals_kpay_txs');
+      if (saved) {
+        return JSON.parse(saved);
+      }
+    } catch (e) {}
+
+    return [
+      {
+        id: 'kpay_tx_101',
+        txRef: 'KPAY-2026-884120',
+        createdAt: new Date(Date.now() - 3600000 * 48).toISOString(),
+        restaurantName: 'KinBurger Express',
+        payerName: 'Jean Mukendi',
+        type: 'subscription',
+        grossAmount: 49.00,
+        feeAmount: 1.23,
+        netAmount: 47.77,
+        currency: 'USD',
+        status: 'captured',
+        paymentChannel: 'DashMeals Pay (M-Pesa)',
+        notes: 'Abonnement Mensuel Gold Premium'
+      },
+      {
+        id: 'kpay_tx_102',
+        txRef: 'KPAY-2026-773192',
+        createdAt: new Date(Date.now() - 3600000 * 24).toISOString(),
+        restaurantName: 'Le Jardin Gourmand',
+        payerName: 'Marie Claire',
+        type: 'subscription',
+        grossAmount: 29.00,
+        feeAmount: 0.73,
+        netAmount: 28.27,
+        currency: 'USD',
+        status: 'captured',
+        paymentChannel: 'DashMeals Pay (Orange)',
+        notes: 'Abonnement Mensuel Basic'
+      },
+      {
+        id: 'kpay_tx_103',
+        txRef: 'KPAY-2026-992145',
+        createdAt: new Date(Date.now() - 3600000 * 12).toISOString(),
+        restaurantName: 'Chez Ntemba Lounge',
+        payerName: 'Joseph K.',
+        type: 'subscription',
+        grossAmount: 99.00,
+        feeAmount: 2.48,
+        netAmount: 96.52,
+        currency: 'USD',
+        status: 'captured',
+        paymentChannel: 'DashMeals Pay (Airtel)',
+        notes: 'Abonnement Annuel Elite VIP'
+      }
+    ];
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('dashmeals_kpay_txs', JSON.stringify(kpayTransactions));
+    } catch (e) {}
+  }, [kpayTransactions]);
 
   const [editRestaurantModal, setEditRestaurantModal] = useState<{ isOpen: boolean; restaurant: Restaurant | null }>({ isOpen: false, restaurant: null });
   const [editRestoForm, setEditRestoForm] = useState<{
@@ -378,7 +707,7 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
          })
        });
 
-      const resData = await response.json();
+      const resData = await parseJsonResponse(response);
 
       if (!response.ok || resData.error) {
         const errorMsg = resData.error || "Erreur de communication avec le serveur.";
@@ -544,6 +873,19 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
           payment_exchange_rate: raw.payment_exchange_rate || 2850
         });
       }
+
+      const { data: subData } = await supabase
+        .from('app_settings')
+        .select('value')
+        .eq('id', 'sub_admins')
+        .maybeSingle();
+      if (subData?.value) {
+        const rawSubs = typeof subData.value === 'string' ? JSON.parse(subData.value) : subData.value;
+        if (Array.isArray(rawSubs) && rawSubs.length > 0) {
+          setSubAdmins(rawSubs);
+          localStorage.setItem('dashmeals_subadmins', JSON.stringify(rawSubs));
+        }
+      }
     } catch (error) {
       console.error("Error fetching settings:", error);
     }
@@ -625,6 +967,10 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
   };
 
   const handleNavigation = (view: AdminView) => {
+      if (!canAccessView(view)) {
+        toast.error("Permission insuffisante : Votre rôle de sous-administrateur ne vous donne pas accès à ce module.");
+        return;
+      }
       setActiveView(view);
       setIsMobileMenuOpen(false);
   };
@@ -1894,68 +2240,78 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
 
   const renderOverview = () => (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6 animate-in fade-in duration-300">
-      <div className="bg-white dark:bg-[#0d1527] p-6 rounded-3xl shadow-lg hover:shadow-xl dark:shadow-none border border-gray-100/80 dark:border-white/[0.05] transition-all duration-350 hover:-translate-y-1 relative overflow-hidden group">
-        <div className="absolute top-0 right-0 w-24 h-24 bg-blue-500/5 rounded-bl-full pointer-events-none transition-all duration-300 group-hover:scale-110"></div>
-        <div className="flex items-center justify-between mb-4 relative z-10">
-          <div className="bg-blue-100 dark:bg-blue-900/30 p-3 rounded-2xl text-blue-600 dark:text-blue-400">
-            <Users size={22} />
+      {canAccessView('users') && (
+        <div className="bg-white dark:bg-[#0d1527] p-6 rounded-3xl shadow-lg hover:shadow-xl dark:shadow-none border border-gray-100/80 dark:border-white/[0.05] transition-all duration-350 hover:-translate-y-1 relative overflow-hidden group cursor-pointer" onClick={() => handleNavigation('users')}>
+          <div className="absolute top-0 right-0 w-24 h-24 bg-blue-500/5 rounded-bl-full pointer-events-none transition-all duration-300 group-hover:scale-110"></div>
+          <div className="flex items-center justify-between mb-4 relative z-10">
+            <div className="bg-blue-100 dark:bg-blue-900/30 p-3 rounded-2xl text-blue-600 dark:text-blue-400">
+              <Users size={22} />
+            </div>
+            <span className="text-[10px] font-black text-gray-400 dark:text-slate-400 uppercase tracking-widest">Utilisateurs</span>
           </div>
-          <span className="text-[10px] font-black text-gray-400 dark:text-slate-400 uppercase tracking-widest">Utilisateurs</span>
+          <p className="text-3xl font-black text-gray-900 dark:text-white tracking-tight relative z-10">{stats.totalUsers}</p>
+          <p className="text-xs text-green-500 font-bold mt-3 flex items-center relative z-10 bg-green-500/5 py-1 px-2 rounded-lg w-max"><Activity size={12} className="mr-1"/> Actifs</p>
         </div>
-        <p className="text-3xl font-black text-gray-900 dark:text-white tracking-tight relative z-10">{stats.totalUsers}</p>
-        <p className="text-xs text-green-500 font-bold mt-3 flex items-center relative z-10 bg-green-500/5 py-1 px-2 rounded-lg w-max"><Activity size={12} className="mr-1"/> Actifs</p>
-      </div>
+      )}
 
-      <div className="bg-white dark:bg-[#0d1527] p-6 rounded-3xl shadow-lg hover:shadow-xl dark:shadow-none border border-gray-100/80 dark:border-white/[0.05] transition-all duration-350 hover:-translate-y-1 relative overflow-hidden group">
-        <div className="absolute top-0 right-0 w-24 h-24 bg-orange-500/5 rounded-bl-full pointer-events-none transition-all duration-300 group-hover:scale-110"></div>
-        <div className="flex items-center justify-between mb-4 relative z-10">
-          <div className="bg-orange-100 dark:bg-orange-900/30 p-3 rounded-2xl text-orange-600 dark:text-orange-400">
-            <Store size={22} />
+      {canAccessView('restaurants') && (
+        <div className="bg-white dark:bg-[#0d1527] p-6 rounded-3xl shadow-lg hover:shadow-xl dark:shadow-none border border-gray-100/80 dark:border-white/[0.05] transition-all duration-350 hover:-translate-y-1 relative overflow-hidden group cursor-pointer" onClick={() => handleNavigation('restaurants')}>
+          <div className="absolute top-0 right-0 w-24 h-24 bg-orange-500/5 rounded-bl-full pointer-events-none transition-all duration-300 group-hover:scale-110"></div>
+          <div className="flex items-center justify-between mb-4 relative z-10">
+            <div className="bg-orange-100 dark:bg-orange-900/30 p-3 rounded-2xl text-orange-600 dark:text-orange-400">
+              <Store size={22} />
+            </div>
+            <span className="text-[10px] font-black text-gray-400 dark:text-slate-400 uppercase tracking-widest">{t('restaurants')}</span>
           </div>
-          <span className="text-[10px] font-black text-gray-400 dark:text-slate-400 uppercase tracking-widest">{t('restaurants')}</span>
+          <p className="text-3xl font-black text-gray-900 dark:text-white tracking-tight relative z-10">{stats.totalRestaurants}</p>
+          <p className="text-xs text-orange-500 font-bold mt-3 flex items-center relative z-10 bg-orange-500/5 py-1 px-2 rounded-lg w-max">Partenaires actifs</p>
         </div>
-        <p className="text-3xl font-black text-gray-900 dark:text-white tracking-tight relative z-10">{stats.totalRestaurants}</p>
-        <p className="text-xs text-orange-500 font-bold mt-3 flex items-center relative z-10 bg-orange-500/5 py-1 px-2 rounded-lg w-max">Partenaires actifs</p>
-      </div>
+      )}
 
-      <div className="bg-white dark:bg-[#0d1527] p-6 rounded-3xl shadow-lg hover:shadow-xl dark:shadow-none border border-gray-100/80 dark:border-white/[0.05] transition-all duration-350 hover:-translate-y-1 relative overflow-hidden group">
-        <div className="absolute top-0 right-0 w-24 h-24 bg-purple-500/5 rounded-bl-full pointer-events-none transition-all duration-300 group-hover:scale-110"></div>
-        <div className="flex items-center justify-between mb-4 relative z-10">
-          <div className="bg-purple-100 dark:bg-purple-900/30 p-3 rounded-2xl text-purple-600 dark:text-purple-400">
-            <ShoppingBag size={22} />
+      {(canAccessView('restaurants') || canAccessView('subscriptions')) && (
+        <div className="bg-white dark:bg-[#0d1527] p-6 rounded-3xl shadow-lg hover:shadow-xl dark:shadow-none border border-gray-100/80 dark:border-white/[0.05] transition-all duration-350 hover:-translate-y-1 relative overflow-hidden group">
+          <div className="absolute top-0 right-0 w-24 h-24 bg-purple-500/5 rounded-bl-full pointer-events-none transition-all duration-300 group-hover:scale-110"></div>
+          <div className="flex items-center justify-between mb-4 relative z-10">
+            <div className="bg-purple-100 dark:bg-purple-900/30 p-3 rounded-2xl text-purple-600 dark:text-purple-400">
+              <ShoppingBag size={22} />
+            </div>
+            <span className="text-[10px] font-black text-gray-400 dark:text-slate-400 uppercase tracking-widest">{t('orders')}</span>
           </div>
-          <span className="text-[10px] font-black text-gray-400 dark:text-slate-400 uppercase tracking-widest">{t('orders')}</span>
+          <p className="text-3xl font-black text-gray-900 dark:text-white tracking-tight relative z-10">{stats.totalOrders}</p>
+          <p className="text-xs text-purple-500 font-bold mt-3 flex items-center relative z-10 bg-purple-500/5 py-1 px-2 rounded-lg w-max"><Activity size={12} className="mr-1"/>{t('total')}</p>
         </div>
-        <p className="text-3xl font-black text-gray-900 dark:text-white tracking-tight relative z-10">{stats.totalOrders}</p>
-        <p className="text-xs text-purple-500 font-bold mt-3 flex items-center relative z-10 bg-purple-500/5 py-1 px-2 rounded-lg w-max"><Activity size={12} className="mr-1"/>{t('total')}</p>
-      </div>
+      )}
 
-      <div className="bg-white dark:bg-[#0d1527] p-6 rounded-3xl shadow-lg hover:shadow-xl dark:shadow-none border border-gray-100/80 dark:border-white/[0.05] transition-all duration-350 hover:-translate-y-1 cursor-pointer hover:border-orange-500/40 relative overflow-hidden group" onClick={() => setActiveView('requests')}>
-        <div className="absolute top-0 right-0 w-24 h-24 bg-orange-500/5 rounded-bl-full pointer-events-none transition-all duration-300 group-hover:scale-110"></div>
-        <div className="flex items-center justify-between mb-4 relative z-10">
-          <div className="bg-orange-100 dark:bg-orange-900/30 p-3 rounded-2xl text-orange-600 dark:text-orange-400">
-            <Mail size={22} />
+      {canAccessView('requests') && (
+        <div className="bg-white dark:bg-[#0d1527] p-6 rounded-3xl shadow-lg hover:shadow-xl dark:shadow-none border border-gray-100/80 dark:border-white/[0.05] transition-all duration-350 hover:-translate-y-1 cursor-pointer hover:border-orange-500/40 relative overflow-hidden group" onClick={() => handleNavigation('requests')}>
+          <div className="absolute top-0 right-0 w-24 h-24 bg-orange-500/5 rounded-bl-full pointer-events-none transition-all duration-300 group-hover:scale-110"></div>
+          <div className="flex items-center justify-between mb-4 relative z-10">
+            <div className="bg-orange-100 dark:bg-orange-900/30 p-3 rounded-2xl text-orange-600 dark:text-orange-400">
+              <Mail size={22} />
+            </div>
+            <span className="text-[10px] font-black text-gray-400 dark:text-slate-400 uppercase tracking-widest">Demandes</span>
           </div>
-          <span className="text-[10px] font-black text-gray-400 dark:text-slate-400 uppercase tracking-widest">Demandes</span>
+          <p className="text-3xl font-black text-gray-900 dark:text-white tracking-tight relative z-10">{stats.pendingVerifications + stats.subscriptionRequests}</p>
+          <p className="text-xs text-orange-600 font-bold mt-3 flex items-center relative z-10 bg-orange-500/5 py-1 px-2 rounded-lg w-max">
+              <AlertTriangle size={12} className="mr-1"/> 
+              {stats.pendingVerifications} vérif. + {stats.subscriptionRequests} abonn.
+          </p>
         </div>
-        <p className="text-3xl font-black text-gray-900 dark:text-white tracking-tight relative z-10">{stats.pendingVerifications + stats.subscriptionRequests}</p>
-        <p className="text-xs text-orange-600 font-bold mt-3 flex items-center relative z-10 bg-orange-500/5 py-1 px-2 rounded-lg w-max">
-            <AlertTriangle size={12} className="mr-1"/> 
-            {stats.pendingVerifications} vérif. + {stats.subscriptionRequests} abonn.
-        </p>
-      </div>
+      )}
 
-      <div className="bg-white dark:bg-[#0d1527] p-6 rounded-3xl shadow-lg hover:shadow-xl dark:shadow-none border border-gray-100/80 dark:border-white/[0.05] transition-all duration-350 hover:-translate-y-1 cursor-pointer hover:border-red-500/40 relative overflow-hidden group" onClick={() => setActiveView('support')}>
-        <div className="absolute top-0 right-0 w-24 h-24 bg-red-500/5 rounded-bl-full pointer-events-none transition-all duration-300 group-hover:scale-110"></div>
-        <div className="flex items-center justify-between mb-4 relative z-10">
-          <div className="bg-red-100 dark:bg-red-900/30 p-3 rounded-2xl text-red-600 dark:text-red-400">
-            <MessageSquare size={22} />
+      {canAccessView('support') && (
+        <div className="bg-white dark:bg-[#0d1527] p-6 rounded-3xl shadow-lg hover:shadow-xl dark:shadow-none border border-gray-100/80 dark:border-white/[0.05] transition-all duration-350 hover:-translate-y-1 cursor-pointer hover:border-red-500/40 relative overflow-hidden group" onClick={() => handleNavigation('support')}>
+          <div className="absolute top-0 right-0 w-24 h-24 bg-red-500/5 rounded-bl-full pointer-events-none transition-all duration-300 group-hover:scale-110"></div>
+          <div className="flex items-center justify-between mb-4 relative z-10">
+            <div className="bg-red-100 dark:bg-red-900/30 p-3 rounded-2xl text-red-600 dark:text-red-400">
+              <MessageSquare size={22} />
+            </div>
+            <span className="text-[10px] font-black text-gray-400 dark:text-slate-400 uppercase tracking-widest">{t('support')}</span>
           </div>
-          <span className="text-[10px] font-black text-gray-400 dark:text-slate-400 uppercase tracking-widest">{t('support')}</span>
+          <p className="text-3xl font-black text-gray-900 dark:text-white tracking-tight relative z-10">{stats.openTickets}</p>
+          <p className="text-xs text-red-500 font-bold mt-3 flex items-center relative z-10 bg-red-500/5 py-1 px-2 rounded-lg w-max"><Activity size={12} className="mr-1"/> {stats.openTickets} ouverts</p>
         </div>
-        <p className="text-3xl font-black text-gray-900 dark:text-white tracking-tight relative z-10">{stats.openTickets}</p>
-        <p className="text-xs text-red-500 font-bold mt-3 flex items-center relative z-10 bg-red-500/5 py-1 px-2 rounded-lg w-max"><Activity size={12} className="mr-1"/> {stats.openTickets} ouverts</p>
-      </div>
+      )}
     </div>
   );
 
@@ -2602,6 +2958,1203 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
     </div>
   );
 
+  const renderDashMealsPayTransactionsDashboard = () => {
+    const filteredTxs = kpayTransactions.filter(tx => {
+      const matchSearch = (tx.txRef || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          (tx.restaurantName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          (tx.notes || '').toLowerCase().includes(searchTerm.toLowerCase());
+      if (!matchSearch) return false;
+
+      if (kpayTxFilter !== 'all' && tx.status !== kpayTxFilter) return false;
+      if (kpayTypeFilter !== 'all' && tx.type !== kpayTypeFilter) return false;
+
+      return true;
+    });
+
+    const totalCapturedGross = kpayTransactions
+      .filter(tx => tx.status === 'captured')
+      .reduce((sum, tx) => sum + Math.abs(tx.grossAmount || 0), 0);
+
+    const totalRefundedGross = kpayTransactions
+      .filter(tx => tx.status === 'refunded')
+      .reduce((sum, tx) => sum + Math.abs(tx.netAmount || 0), 0);
+
+    const totalFees = kpayTransactions.reduce((sum, tx) => sum + Math.abs(tx.feeAmount || 0), 0);
+
+    const netKpayBalance = totalCapturedGross - totalRefundedGross - totalFees;
+
+    const capturedCount = kpayTransactions.filter(tx => tx.status === 'captured').length;
+    const refundedCount = kpayTransactions.filter(tx => tx.status === 'refunded').length;
+    const pendingCount = kpayTransactions.filter(tx => tx.status === 'pending').length;
+
+    return (
+      <div className="space-y-6 animate-in fade-in duration-300">
+        {/* KPI Cards */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="bg-white dark:bg-gray-800 p-5 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm relative overflow-hidden">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[10px] font-extrabold uppercase text-gray-400 tracking-wider">Total Encaissements</span>
+              <div className="p-2 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 rounded-xl">
+                <ArrowUpRight size={16} />
+              </div>
+            </div>
+            <div className="text-2xl font-black text-emerald-600 dark:text-emerald-400">
+              ${totalCapturedGross.toFixed(2)} <span className="text-xs text-gray-400 font-normal">USD</span>
+            </div>
+            <p className="text-[11px] text-gray-400 mt-1">{capturedCount} transaction(s) capturée(s)</p>
+          </div>
+
+          <div className="bg-white dark:bg-gray-800 p-5 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm relative overflow-hidden">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[10px] font-extrabold uppercase text-gray-400 tracking-wider">Total Remboursé (Prorata)</span>
+              <div className="p-2 bg-rose-50 dark:bg-rose-950/30 text-rose-600 rounded-xl">
+                <RotateCcw size={16} />
+              </div>
+            </div>
+            <div className="text-2xl font-black text-rose-600 dark:text-rose-400">
+              -${totalRefundedGross.toFixed(2)} <span className="text-xs text-gray-400 font-normal">USD</span>
+            </div>
+            <p className="text-[11px] text-gray-400 mt-1">{refundedCount} remboursement(s) synchronisé(s)</p>
+          </div>
+
+          <div className="bg-white dark:bg-gray-800 p-5 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm relative overflow-hidden">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[10px] font-extrabold uppercase text-gray-400 tracking-wider">Solde Net DashMeals Pay</span>
+              <div className="p-2 bg-blue-50 dark:bg-blue-950/30 text-blue-600 rounded-xl">
+                <CreditCard size={16} />
+              </div>
+            </div>
+            <div className="text-2xl font-black text-blue-600 dark:text-blue-400">
+              ${netKpayBalance.toFixed(2)} <span className="text-xs text-gray-400 font-normal">USD</span>
+            </div>
+            <p className="text-[11px] text-gray-400 mt-1">Après déduction frais & remboursements</p>
+          </div>
+
+          <div className="bg-white dark:bg-gray-800 p-5 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm relative overflow-hidden">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[10px] font-extrabold uppercase text-gray-400 tracking-wider">Commissions DashMeals Pay (2.5%)</span>
+              <div className="p-2 bg-purple-50 dark:bg-purple-950/30 text-purple-600 rounded-xl">
+                <ShieldCheck size={16} />
+              </div>
+            </div>
+            <div className="text-2xl font-black text-purple-600 dark:text-purple-400">
+              ${totalFees.toFixed(2)} <span className="text-xs text-gray-400 font-normal">USD</span>
+            </div>
+            <p className="text-[11px] text-gray-400 mt-1">Frais de traitement passerelle</p>
+          </div>
+        </div>
+
+        {/* Filter & Search Toolbar */}
+        <div className="bg-white dark:bg-gray-800 p-4 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm flex flex-col md:flex-row justify-between items-stretch md:items-center gap-4">
+          <div className="relative flex-1 max-w-md">
+            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={e => setSearchTerm(e.target.value)}
+              placeholder="Rechercher par réf KPAY-..., restaurant, motif..."
+              className="w-full pl-10 pr-4 py-2.5 bg-gray-50 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600 rounded-xl text-xs font-medium focus:ring-2 focus:ring-brand-500 outline-none text-gray-900 dark:text-white"
+            />
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Status Filter */}
+            <div className="flex items-center p-1 bg-gray-100 dark:bg-gray-700/60 rounded-xl">
+              {[
+                { id: 'all', label: `Tous (${kpayTransactions.length})` },
+                { id: 'captured', label: `Capturés (${capturedCount})` },
+                { id: 'refunded', label: `Remboursés (${refundedCount})` },
+                { id: 'pending', label: `En Attente (${pendingCount})` },
+              ].map(f => (
+                <button
+                  key={f.id}
+                  onClick={() => setKpayTxFilter(f.id as any)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                    kpayTxFilter === f.id
+                      ? 'bg-white dark:bg-gray-800 text-slate-900 dark:text-white shadow-sm'
+                      : 'text-gray-500 hover:text-gray-900 dark:hover:text-white'
+                  }`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Type Filter */}
+            <select
+              value={kpayTypeFilter}
+              onChange={e => setKpayTypeFilter(e.target.value as any)}
+              className="p-2.5 bg-gray-50 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600 rounded-xl text-xs font-bold text-gray-800 dark:text-white outline-none"
+            >
+              <option value="all">Tous types de flux</option>
+              <option value="subscription">Abonnements</option>
+              <option value="refund">Remboursements</option>
+              <option value="order_payment">Commandes Clients</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Real-time Ledger Table */}
+        <div className="bg-white dark:bg-gray-800 rounded-3xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
+          <div className="p-4 sm:p-5 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center bg-gray-50/50 dark:bg-gray-900/20">
+            <div>
+              <h4 className="font-extrabold text-sm sm:text-base text-gray-900 dark:text-white flex items-center gap-2">
+                <CreditCard size={18} className="text-brand-500" />
+                Journal des Flux Financiers DashMeals Pay
+              </h4>
+              <p className="text-xs text-gray-500 mt-0.5">Mise à jour instantanée des encaissements et remboursements au prorata</p>
+            </div>
+            <span className="text-[11px] font-mono font-bold text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 dark:text-emerald-400 px-3 py-1 rounded-full border border-emerald-200 dark:border-emerald-800/40 flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              Live Sync DashMeals Pay
+            </span>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse min-w-[700px]">
+              <thead>
+                <tr className="bg-gray-50 dark:bg-gray-700/50 text-gray-500 dark:text-gray-400 text-[11px] uppercase tracking-wider font-extrabold border-b border-gray-100 dark:border-gray-700">
+                  <th className="p-4">Réf. Transaction</th>
+                  <th className="p-4">Date & Heure</th>
+                  <th className="p-4">Établissement / Payeur</th>
+                  <th className="p-4">Type & Canal</th>
+                  <th className="p-4 text-right">Montant Brut</th>
+                  <th className="p-4 text-right">Frais (2.5%)</th>
+                  <th className="p-4 text-right">Net Restitué/Reçu</th>
+                  <th className="p-4 text-center">Statut</th>
+                  <th className="p-4 text-center">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 dark:divide-gray-700/60 text-xs">
+                {filteredTxs.map(tx => (
+                  <tr key={tx.id} className="hover:bg-slate-50/80 dark:hover:bg-gray-700/40 transition-colors">
+                    <td className="p-4 font-mono font-black text-slate-800 dark:text-slate-200">
+                      <span className="bg-slate-100 dark:bg-slate-700 px-2 py-1 rounded-md border border-slate-200 dark:border-slate-600">
+                        {tx.txRef}
+                      </span>
+                    </td>
+                    <td className="p-4 text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                      {new Date(tx.createdAt).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                    </td>
+                    <td className="p-4">
+                      <p className="font-extrabold text-gray-900 dark:text-white">{tx.restaurantName}</p>
+                      {tx.payerName && <p className="text-[11px] text-gray-400">{tx.payerName}</p>}
+                    </td>
+                    <td className="p-4">
+                      <div className="flex flex-col gap-1">
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-black w-max ${
+                          tx.type === 'refund' 
+                            ? 'bg-rose-100 dark:bg-rose-950/40 text-rose-700 dark:text-rose-400 border border-rose-200 dark:border-rose-800/40'
+                            : 'bg-blue-100 dark:bg-blue-950/40 text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-800/40'
+                        }`}>
+                          {tx.type === 'refund' ? '💸 Remboursement Prorata' : '💳 Abonnement DashMeals Pay'}
+                        </span>
+                        <span className="text-[10px] text-gray-400 font-medium">{tx.paymentChannel}</span>
+                      </div>
+                    </td>
+                    <td className="p-4 text-right font-mono font-bold text-gray-800 dark:text-gray-200">
+                      {tx.grossAmount < 0 ? '-' : ''}${Math.abs(tx.grossAmount).toFixed(2)}
+                    </td>
+                    <td className="p-4 text-right font-mono text-gray-400">
+                      {tx.feeAmount < 0 ? '-' : ''}${Math.abs(tx.feeAmount).toFixed(2)}
+                    </td>
+                    <td className="p-4 text-right font-mono font-black text-sm">
+                      <span className={tx.netAmount < 0 ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'}>
+                        {tx.netAmount < 0 ? '-' : '+'}${Math.abs(tx.netAmount).toFixed(2)} USD
+                      </span>
+                    </td>
+                    <td className="p-4 text-center">
+                      {tx.status === 'captured' && (
+                        <span className="px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/40 inline-flex items-center gap-1">
+                          <CheckCircle size={12} /> Capturé
+                        </span>
+                      )}
+                      {tx.status === 'refunded' && (
+                        <span className="px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-rose-100 dark:bg-rose-950/40 text-rose-700 dark:text-rose-400 border border-rose-200 dark:border-rose-800/40 inline-flex items-center gap-1">
+                          <RotateCcw size={12} /> Remboursé
+                        </span>
+                      )}
+                      {tx.status === 'pending' && (
+                        <span className="px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-amber-100 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800/40 inline-flex items-center gap-1">
+                          <RefreshCw size={12} className="animate-spin" /> En attente
+                        </span>
+                      )}
+                    </td>
+                    <td className="p-4 text-center">
+                      <div className="flex items-center justify-center gap-1.5">
+                        <button
+                          onClick={() => setSelectedKpayTx(tx)}
+                          className="px-2.5 py-1.5 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-lg text-xs font-bold transition-all inline-flex items-center gap-1 cursor-pointer"
+                          title="Voir le reçu"
+                        >
+                          <FileText size={13} />
+                          <span>Reçu</span>
+                        </button>
+                        <button
+                          onClick={() => {
+                            const email = prompt("Saisissez l'adresse email de destination pour la facture :", "partenaire@dashmeals.cd");
+                            if (email) {
+                              handleSendInvoiceEmail(tx, email);
+                            }
+                          }}
+                          className="px-2.5 py-1.5 bg-blue-50 dark:bg-blue-950/40 hover:bg-blue-100 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800/40 rounded-lg text-xs font-bold transition-all inline-flex items-center gap-1 cursor-pointer"
+                          title="Envoyer la facture par email"
+                        >
+                          <Mail size={13} />
+                          <span>Facture 📧</span>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+
+                {filteredTxs.length === 0 && (
+                  <tr>
+                    <td colSpan={9} className="p-12 text-center text-gray-500 dark:text-gray-400">
+                      <p className="font-bold">Aucune transaction ne correspond aux filtres.</p>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Receipt Modal */}
+        {selectedKpayTx && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[120] flex items-center justify-center p-4">
+            <div className="bg-white dark:bg-gray-800 w-full max-w-md rounded-3xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 border border-gray-100 dark:border-gray-700">
+              <div className="p-5 bg-gradient-to-r from-slate-900 to-indigo-950 text-white flex justify-between items-center">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 bg-brand-500/20 rounded-xl border border-brand-400/30">
+                    <CreditCard size={18} className="text-brand-400" />
+                  </div>
+                  <div>
+                    <h3 className="font-black text-base">Reçu de Transaction DashMeals Pay</h3>
+                    <p className="text-[11px] text-slate-300 font-mono">{selectedKpayTx.txRef}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setSelectedKpayTx(null)}
+                  className="p-1.5 hover:bg-white/20 rounded-full text-white transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="p-6 space-y-4">
+                <div className="text-center p-4 bg-slate-50 dark:bg-slate-700/50 rounded-2xl border border-slate-200 dark:border-slate-600">
+                  <span className="text-[10px] font-black uppercase text-gray-400 tracking-wider">Montant Net Effectif</span>
+                  <div className={`text-3xl font-black mt-1 ${selectedKpayTx.netAmount < 0 ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                    {selectedKpayTx.netAmount < 0 ? '-' : '+'}${Math.abs(selectedKpayTx.netAmount).toFixed(2)} USD
+                  </div>
+                  <span className={`inline-block mt-2 px-3 py-0.5 rounded-full text-[10px] font-extrabold uppercase ${
+                    selectedKpayTx.status === 'refunded' ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'
+                  }`}>
+                    {selectedKpayTx.status === 'refunded' ? 'Remboursement Traité' : 'Paiement Confirmé'}
+                  </span>
+                </div>
+
+                <div className="space-y-2 text-xs border-t border-b border-gray-100 dark:border-gray-700 py-3">
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Établissement :</span>
+                    <span className="font-bold text-gray-900 dark:text-white">{selectedKpayTx.restaurantName}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Date & Heure :</span>
+                    <span className="font-medium text-gray-700 dark:text-gray-300">
+                      {new Date(selectedKpayTx.createdAt).toLocaleString('fr-FR')}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Canal de Règlement :</span>
+                    <span className="font-medium text-gray-700 dark:text-gray-300">{selectedKpayTx.paymentChannel}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Montant Brut :</span>
+                    <span className="font-mono font-bold text-gray-800 dark:text-gray-200">${Math.abs(selectedKpayTx.grossAmount).toFixed(2)} USD</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Frais de Service (2.5%) :</span>
+                    <span className="font-mono text-gray-500">${Math.abs(selectedKpayTx.feeAmount).toFixed(2)} USD</span>
+                  </div>
+                  {selectedKpayTx.notes && (
+                    <div className="pt-2 border-t border-dashed border-gray-200 dark:border-gray-700">
+                      <span className="text-gray-400 text-[10px] uppercase font-bold block">Note / Motif :</span>
+                      <p className="text-gray-700 dark:text-gray-300 font-medium italic mt-0.5">{selectedKpayTx.notes}</p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="bg-slate-50 dark:bg-slate-700/50 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-600 space-y-2">
+                  <label className="block text-[10px] font-extrabold uppercase text-gray-500 dark:text-gray-400">
+                    Envoyer la Facture Officielle par Email :
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="email"
+                      value={invoiceRecipientEmail}
+                      onChange={(e) => setInvoiceRecipientEmail(e.target.value)}
+                      placeholder="email.client@domaine.cd"
+                      className="flex-1 px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-xl text-xs outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-white font-medium"
+                    />
+                    <button
+                      onClick={() => handleSendInvoiceEmail(selectedKpayTx, invoiceRecipientEmail)}
+                      disabled={isSendingInvoice}
+                      className="px-3 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md transition-all cursor-pointer whitespace-nowrap"
+                    >
+                      {isSendingInvoice ? <RefreshCw size={14} className="animate-spin" /> : <Mail size={14} />}
+                      <span>Envoyer 📧</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-1">
+                  <button
+                    onClick={() => {
+                      toast.success("Impression du reçu lancée !");
+                      window.print();
+                    }}
+                    className="w-full py-3 bg-brand-600 hover:bg-brand-700 text-white rounded-xl font-bold text-xs uppercase transition-all shadow-lg shadow-brand-500/20 flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    <FileText size={16} />
+                    Imprimer le Reçu PDF
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderSubscriptions = () => {
+    const paidRestaurants = restaurants.filter(r => r.subscriptionTier && r.subscriptionTier !== 'free');
+    
+    const activePaidCount = paidRestaurants.filter(r => r.subscriptionStatus === 'active').length;
+    const cancelledWithDaysCount = paidRestaurants.filter(r => {
+      if (r.subscriptionStatus !== 'cancelled') return false;
+      if (!r.subscriptionEndDate) return false;
+      return new Date(r.subscriptionEndDate).getTime() > new Date().getTime();
+    }).length;
+    const expiredCount = restaurants.filter(r => {
+      if (r.subscriptionStatus === 'expired') return true;
+      if (r.subscriptionEndDate && new Date(r.subscriptionEndDate).getTime() <= new Date().getTime() && r.subscriptionTier !== 'free') return true;
+      return false;
+    }).length;
+
+    const filteredSubs = restaurants.filter(r => {
+      const matchSearch = (r.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          (r.city || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          (r.subscriptionTier || '').toLowerCase().includes(searchTerm.toLowerCase());
+      
+      if (!matchSearch) return false;
+
+      if (subFilter === 'active') return r.subscriptionTier !== 'free' && r.subscriptionStatus === 'active';
+      if (subFilter === 'cancelled') {
+        return r.subscriptionStatus === 'cancelled' && r.subscriptionEndDate && new Date(r.subscriptionEndDate).getTime() > new Date().getTime();
+      }
+      if (subFilter === 'expired') return r.subscriptionStatus === 'expired' || (r.subscriptionEndDate && new Date(r.subscriptionEndDate).getTime() <= new Date().getTime() && r.subscriptionTier !== 'free');
+      if (subFilter === 'refunded') return r.subscriptionStatus === 'refunded';
+      if (subFilter === 'free') return !r.subscriptionTier || r.subscriptionTier === 'free';
+      return true;
+    });
+
+    const totalEstRevenue = paidRestaurants.reduce((sum, r) => {
+      if (r.subscriptionTier === 'enterprise' || r.subscriptionTier === 'elite') return sum + 99;
+      if (r.subscriptionTier === 'premium' || r.subscriptionTier === 'pro') return sum + 49;
+      if (r.subscriptionTier === 'basic') return sum + 29;
+      return sum;
+    }, 0);
+
+    return (
+      <div className="space-y-6 animate-in fade-in duration-300">
+        {/* Navigation Sub-Tabs DashMeals Pay */}
+        <div className="flex items-center gap-3 bg-gray-100 dark:bg-gray-800 p-1.5 rounded-2xl border border-gray-200 dark:border-gray-700 w-fit">
+          <button
+            onClick={() => setSubSectionView('kpay_transactions')}
+            className={`px-5 py-2.5 rounded-xl text-xs font-black transition-all flex items-center gap-2 cursor-pointer ${
+              subSectionView === 'kpay_transactions'
+                ? 'bg-slate-900 text-white shadow-lg shadow-slate-900/20 dark:bg-brand-600'
+                : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+            }`}
+          >
+            <CreditCard size={16} />
+            <span>Suivi Transactions DashMeals Pay (Temps Réel)</span>
+            <span className="bg-emerald-500 text-white text-[9px] font-black px-2 py-0.5 rounded-full ml-1">Live</span>
+          </button>
+
+          <button
+            onClick={() => setSubSectionView('restaurants')}
+            className={`px-5 py-2.5 rounded-xl text-xs font-black transition-all flex items-center gap-2 cursor-pointer ${
+              subSectionView === 'restaurants'
+                ? 'bg-slate-900 text-white shadow-lg shadow-slate-900/20 dark:bg-brand-600'
+                : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+            }`}
+          >
+            <Store size={16} />
+            <span>Gestion des Forfaits par Établissement</span>
+          </button>
+        </div>
+
+        {subSectionView === 'kpay_transactions' ? renderDashMealsPayTransactionsDashboard() : (
+          <>
+        {/* DashMeals Pay Style Header Banner */}
+        <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 p-6 md:p-8 rounded-3xl text-white shadow-xl relative overflow-hidden border border-slate-700/50">
+          <div className="absolute top-0 right-0 w-96 h-96 bg-brand-500/10 rounded-full blur-3xl -mr-32 -mt-32 pointer-events-none" />
+          <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
+            <div>
+              <div className="flex items-center space-x-2 text-brand-400 font-extrabold text-xs uppercase tracking-widest mb-1">
+                <CreditCard size={16} />
+                <span>DashMeals Pay Ledger</span>
+              </div>
+              <h3 className="text-2xl md:text-3xl font-black tracking-tight text-white">
+                Tableau de Bord des Paiements & Abonnements
+              </h3>
+              <p className="text-slate-300 text-xs md:text-sm mt-1 max-w-xl">
+                Suivi en temps réel des transactions DashMeals Pay, gestion des périodes de validité restantes et réactivation des comptes partenaires.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => fetchRestaurants()}
+                className="px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-bold transition-all border border-white/10 backdrop-blur-md flex items-center space-x-2"
+              >
+                <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+                <span>Actualiser</span>
+              </button>
+            </div>
+          </div>
+
+          {/* DashMeals Pay Metrics Summary Cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-8 pt-6 border-t border-slate-700/60">
+            <div className="bg-slate-800/60 backdrop-blur-md p-4 rounded-2xl border border-slate-700/50">
+              <span className="text-[10px] font-extrabold uppercase text-slate-400 tracking-wider">Revenus Estimés (Abonnements)</span>
+              <div className="text-xl md:text-2xl font-black text-emerald-400 mt-1">
+                ${totalEstRevenue}.00 <span className="text-[10px] text-slate-400 font-normal">USD</span>
+              </div>
+              <p className="text-[9px] text-slate-400 mt-0.5">Calculé sur forfaits souscrits</p>
+            </div>
+
+            <div className="bg-slate-800/60 backdrop-blur-md p-4 rounded-2xl border border-slate-700/50">
+              <span className="text-[10px] font-extrabold uppercase text-slate-400 tracking-wider">Abonnements Actifs Payants</span>
+              <div className="text-xl md:text-2xl font-black text-white mt-1 flex items-center gap-2">
+                {activePaidCount}
+                <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[10px] font-bold">En ligne</span>
+              </div>
+              <p className="text-[9px] text-slate-400 mt-0.5">Renouvellement automatique</p>
+            </div>
+
+            <div className="bg-slate-800/60 backdrop-blur-md p-4 rounded-2xl border border-slate-700/50">
+              <span className="text-[10px] font-extrabold uppercase text-slate-400 tracking-wider">En Résiliation (Jours restants)</span>
+              <div className="text-xl md:text-2xl font-black text-amber-400 mt-1 flex items-center gap-2">
+                {cancelledWithDaysCount}
+                <span className="text-xs px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30 text-[10px] font-bold">Actif temporaire</span>
+              </div>
+              <p className="text-[9px] text-slate-400 mt-0.5">Demandé annulation mais encore valide</p>
+            </div>
+
+            <div className="bg-slate-800/60 backdrop-blur-md p-4 rounded-2xl border border-slate-700/50">
+              <span className="text-[10px] font-extrabold uppercase text-slate-400 tracking-wider">Expirés / Gratuit</span>
+              <div className="text-xl md:text-2xl font-black text-slate-300 mt-1">
+                {expiredCount} / {restaurants.length - paidRestaurants.length}
+              </div>
+              <p className="text-[9px] text-slate-400 mt-0.5">À relancer ou forfaits gratuits</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Filters & Search Table Section */}
+        <div className="bg-white dark:bg-gray-800 rounded-3xl shadow-sm border border-gray-100 dark:border-gray-700 p-6">
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
+            <div className="relative flex-1 w-full max-w-md">
+              <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={e => setSearchTerm(e.target.value)}
+                placeholder="Rechercher par établissement, ville, forfait..."
+                className="w-full pl-10 pr-4 py-2.5 bg-gray-50 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600 rounded-xl text-xs font-medium focus:ring-2 focus:ring-brand-500 outline-none text-gray-900 dark:text-white"
+              />
+            </div>
+
+            <div className="flex items-center gap-2 w-full md:w-auto overflow-x-auto pb-2 md:pb-0">
+              {[
+                { id: 'all', label: `Tous (${restaurants.length})` },
+                { id: 'active', label: `Actifs (${activePaidCount})` },
+                { id: 'cancelled', label: `En Résiliation (${cancelledWithDaysCount})` },
+                { id: 'expired', label: `Expirés (${expiredCount})` },
+                { id: 'refunded', label: `Remboursés (${restaurants.filter(r => r.subscriptionStatus === 'refunded').length})` },
+                { id: 'free', label: 'Gratuits' },
+              ].map(f => (
+                <button
+                  key={f.id}
+                  onClick={() => setSubFilter(f.id)}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+                    subFilter === f.id
+                      ? 'bg-brand-600 text-white shadow-md shadow-brand-500/20'
+                      : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200'
+                  }`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* DashMeals Pay Ledger Table */}
+          <div className="overflow-x-auto rounded-2xl border border-gray-100 dark:border-gray-700">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-50 dark:bg-slate-800 text-slate-500 dark:text-slate-400 font-extrabold uppercase text-[10px] tracking-wider border-b border-gray-100 dark:border-gray-700">
+                <tr>
+                  <th className="px-5 py-4">Réf Transaction</th>
+                  <th className="px-5 py-4">Établissement & Ville</th>
+                  <th className="px-5 py-4">Forfait Acheté</th>
+                  <th className="px-5 py-4">Montant Payé</th>
+                  <th className="px-5 py-4">Date & Échéance (Jours)</th>
+                  <th className="px-5 py-4">Statut Paiement</th>
+                  <th className="px-5 py-4 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+                {filteredSubs.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="p-8 text-center text-gray-400 font-medium">
+                      Aucun abonnement trouvé pour ces critères
+                    </td>
+                  </tr>
+                ) : (
+                  filteredSubs.map((r, idx) => {
+                    const isPaid = r.subscriptionTier && r.subscriptionTier !== 'free';
+                    const endDate = r.subscriptionEndDate ? new Date(r.subscriptionEndDate) : null;
+                    const now = new Date();
+                    
+                    let remainingDays = 0;
+                    if (endDate) {
+                      const diffMs = endDate.getTime() - now.getTime();
+                      remainingDays = Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
+                    }
+
+                    const isCancelled = r.subscriptionStatus === 'cancelled' && remainingDays > 0;
+                    const isExpired = r.subscriptionStatus === 'expired' || (endDate && remainingDays === 0 && isPaid);
+                    const isActive = r.subscriptionStatus === 'active' && isPaid && remainingDays > 0;
+
+                    const priceStr = r.subscriptionTier === 'enterprise' || r.subscriptionTier === 'elite' ? '$99.00 USD' :
+                                    r.subscriptionTier === 'premium' || r.subscriptionTier === 'pro' ? '$49.00 USD' :
+                                    r.subscriptionTier === 'basic' ? '$29.00 USD' : 'Gratuit ($0)';
+
+                    const txRef = `KPAY-SUB-${(100000 + idx * 77 + (r.id.charCodeAt(0) || 12) * 19).toString().slice(0, 6)}`;
+
+                    return (
+                      <tr key={r.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-700/50 transition-colors">
+                        <td className="px-5 py-4">
+                          <span className="font-mono font-bold text-slate-700 dark:text-slate-300 text-[11px] bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700">
+                            {txRef}
+                          </span>
+                        </td>
+                        <td className="px-5 py-4">
+                          <div className="font-bold text-gray-900 dark:text-white text-sm">{r.name}</div>
+                          <div className="text-[10px] text-gray-400 font-medium">{r.type?.toUpperCase()} • {r.city}</div>
+                        </td>
+                        <td className="px-5 py-4">
+                          <span className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider ${
+                            r.subscriptionTier === 'enterprise' || r.subscriptionTier === 'elite' ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300 border border-purple-200 dark:border-purple-800' :
+                            r.subscriptionTier === 'premium' || r.subscriptionTier === 'pro' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 border border-blue-200 dark:border-blue-800' :
+                            r.subscriptionTier === 'basic' ? 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300 border border-sky-200 dark:border-sky-800' :
+                            'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400'
+                          }`}>
+                            {r.subscriptionTier === 'premium' ? 'Pro' : r.subscriptionTier === 'enterprise' ? 'Elite' : (r.subscriptionTier || 'Free').toUpperCase()}
+                          </span>
+                        </td>
+                        <td className="px-5 py-4 font-bold text-gray-900 dark:text-white">
+                          {priceStr}
+                          <div className="text-[9px] text-emerald-600 dark:text-emerald-400 font-medium">DashMeals Pay</div>
+                        </td>
+                        <td className="px-5 py-4">
+                          {endDate ? (
+                            <div>
+                              <div className="font-bold text-gray-800 dark:text-gray-200">
+                                Fin: {endDate.toLocaleDateString('fr-FR')}
+                              </div>
+                              <div className={`text-[10px] font-black mt-0.5 ${remainingDays > 5 ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
+                                {remainingDays} jour(s) restant(s)
+                              </div>
+                            </div>
+                          ) : (
+                            <span className="text-gray-400 font-medium">Pas d'échéance</span>
+                          )}
+                        </td>
+                        <td className="px-5 py-4">
+                          {isActive && (
+                            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1.5 animate-pulse" />
+                              Payé & Actif
+                            </span>
+                          )}
+                          {isCancelled && (
+                            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300 border border-amber-200 dark:border-amber-800" title="Abonnement résilié mais valide jusqu'à l'échéance">
+                              <AlertTriangle size={12} className="mr-1 text-amber-600" />
+                              Résilié ({remainingDays}j restants)
+                            </span>
+                          )}
+                          {isExpired && r.subscriptionStatus !== 'refunded' && (
+                            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300 border border-red-200 dark:border-red-800">
+                              <XCircle size={12} className="mr-1 text-red-500" />
+                              Expiré
+                            </span>
+                          )}
+                          {r.subscriptionStatus === 'refunded' && (
+                            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300 border border-purple-200 dark:border-purple-800">
+                              <RotateCcw size={12} className="mr-1 text-purple-600" />
+                              Remboursé
+                            </span>
+                          )}
+                          {!isPaid && r.subscriptionStatus !== 'refunded' && (
+                            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300">
+                              Gratuit
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-5 py-4 text-right space-x-2">
+                          {(isCancelled || isExpired) && isPrincipalAdmin && (
+                            <button
+                              onClick={async () => {
+                                try {
+                                  const newEndDate = new Date();
+                                  newEndDate.setDate(newEndDate.getDate() + 30);
+                                  
+                                  const { error } = await supabase
+                                    .from('restaurants')
+                                    .update({
+                                      subscription_status: 'active',
+                                      subscription_end_date: endDate && remainingDays > 0 ? endDate.toISOString() : newEndDate.toISOString()
+                                    })
+                                    .eq('id', r.id);
+
+                                  if (error) throw error;
+                                  toast.success(`Abonnement de "${r.name}" réactivé avec succès !`);
+                                  fetchRestaurants();
+                                } catch (err: any) {
+                                  toast.error("Erreur de réactivation: " + err.message);
+                                }
+                              }}
+                              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-black uppercase tracking-wider rounded-xl shadow-md transition-all active:scale-95 inline-flex items-center gap-1"
+                              title="Réactiver immédiatement l'abonnement"
+                            >
+                              <CheckCircle size={12} /> Réactiver
+                            </button>
+                          )}
+                          {isPrincipalAdmin && (isPaid || r.subscriptionStatus === 'active' || r.subscriptionStatus === 'cancelled') && r.subscriptionStatus !== 'refunded' && (
+                            <button
+                              onClick={() => setRefundModal({ isOpen: true, restaurant: r, reason: '', returnToFree: true })}
+                              className="px-2.5 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 dark:bg-red-900/20 dark:hover:bg-red-900/40 dark:text-red-400 border border-red-200 dark:border-red-800/40 text-[10px] font-extrabold uppercase tracking-wider rounded-xl transition-all active:scale-95 inline-flex items-center gap-1"
+                              title="Rembourser la transaction"
+                            >
+                              <RotateCcw size={12} /> Rembourser
+                            </button>
+                          )}
+                          {isPrincipalAdmin && (
+                            <button
+                              onClick={() => {
+                                const grossPrice = r.subscriptionTier === 'enterprise' || r.subscriptionTier === 'elite' ? 99 :
+                                                   r.subscriptionTier === 'premium' || r.subscriptionTier === 'pro' ? 49 :
+                                                   r.subscriptionTier === 'basic' ? 29 : 0;
+                                const feePrice = grossPrice * 0.025;
+                                const netPrice = grossPrice - feePrice;
+
+                                const email = prompt(`Saisissez l'email pour la facture d'abonnement de ${r.name} :`, "partenaire@dashmeals.cd");
+                                if (email) {
+                                  handleSendInvoiceEmail({
+                                    type: 'subscription',
+                                    grossAmount: grossPrice,
+                                    feeAmount: feePrice,
+                                    netAmount: netPrice,
+                                    txRef,
+                                    restaurantName: r.name,
+                                    payerName: r.name,
+                                    paymentChannel: 'DashMeals Pay Gateway',
+                                    createdAt: new Date().toISOString(),
+                                    notes: `Abonnement ${(r.subscriptionTier || 'Standard').toUpperCase()} - DashMeals`
+                                  }, email);
+                                }
+                              }}
+                              className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 dark:bg-indigo-900/20 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800/40 text-[10px] font-extrabold uppercase tracking-wider rounded-xl transition-all inline-flex items-center gap-1 cursor-pointer"
+                              title="Envoyer la facture d'abonnement par email"
+                            >
+                              <Mail size={12} /> Facture 📧
+                            </button>
+                          )}
+                          {isPrincipalAdmin && (
+                            <button
+                              onClick={() => {
+                                setSelectedTier(r.subscriptionTier || 'free');
+                                setSubEndDate(r.subscriptionEndDate ? r.subscriptionEndDate.split('T')[0] : '');
+                                setSubscriptionModal({ isOpen: true, restaurant: r });
+                              }}
+                              className="p-2 text-slate-400 hover:text-purple-600 dark:hover:text-purple-400 transition-colors rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700"
+                              title="Modifier / Prolonger l'abonnement"
+                            >
+                              <CreditCard size={16} />
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        </>
+        )}
+      </div>
+    );
+  };
+
+  const PERMISSION_MODULES = [
+    { id: 'subscriptions', label: 'Paiements & Abonnements', desc: 'Gestion des transactions DashMeals Pay & formules restaurants', icon: CreditCard, color: 'text-emerald-500 bg-emerald-500/10 border-emerald-500/30' },
+    { id: 'support', label: 'Support Client & Tickets', desc: 'Gestion et réponse aux tickets de support des utilisateurs', icon: Mail, color: 'text-amber-500 bg-amber-500/10 border-amber-500/30' },
+    { id: 'messages', label: 'Messages Commandes', desc: 'Surveillance et tchat direct des commandes clients/restaurants', icon: MessageSquare, color: 'text-sky-500 bg-sky-500/10 border-sky-500/30' },
+    { id: 'restaurants', label: 'Gestion Restaurants', desc: 'Modération, suspension et activation des établissements', icon: Store, color: 'text-indigo-500 bg-indigo-500/10 border-indigo-500/30' },
+    { id: 'verifications', label: 'Vérification Identités', desc: 'Examen des documents légaux et validation des badges', icon: Shield, color: 'text-purple-500 bg-purple-500/10 border-purple-500/30' },
+    { id: 'users', label: 'Gestion Utilisateurs', desc: 'Gestion des rôles (clients, livreurs, restaurateurs)', icon: Users, color: 'text-blue-500 bg-blue-500/10 border-blue-500/30' },
+    { id: 'publications', label: 'Publications & Cartes', desc: 'Modération des plats, menus et bannières promotionnelles', icon: Database, color: 'text-rose-500 bg-rose-500/10 border-rose-500/30' },
+    { id: 'settings', label: 'Paramètres Plateforme', desc: 'Configuration globale des taux et paramètres système', icon: Settings, color: 'text-slate-400 bg-slate-500/10 border-slate-500/30' }
+  ];
+
+  const renderSubAdminModal = () => {
+    if (!subAdminModal.isOpen) return null;
+
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm animate-in fade-in duration-200">
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl max-w-2xl w-full p-6 md:p-8 shadow-2xl relative max-h-[90vh] overflow-y-auto custom-scrollbar">
+          <button
+            onClick={() => setSubAdminModal({ isOpen: false, subAdmin: null })}
+            className="absolute top-5 right-5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+          >
+            <X size={20} />
+          </button>
+
+          <div className="flex items-center space-x-3 mb-6">
+            <div className="p-3 bg-brand-500/10 text-brand-600 dark:text-brand-400 rounded-2xl border border-brand-500/20">
+              <ShieldCheck size={24} />
+            </div>
+            <div>
+              <h3 className="text-xl font-black text-slate-900 dark:text-white">
+                {subAdminModal.subAdmin ? 'Modifier le Sous-Admin' : 'Créer un Sous-Administrateur'}
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Définissez le profil et accordez des accès restreints selon la fonction
+              </p>
+            </div>
+          </div>
+
+          <form onSubmit={handleSaveSubAdmin} className="space-y-5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5 uppercase tracking-wider">
+                  Nom Complet <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="ex: Alain Mutombo"
+                  value={subAdminFormData.full_name}
+                  onChange={(e) => setSubAdminFormData(prev => ({ ...prev, full_name: e.target.value }))}
+                  className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm font-semibold text-slate-900 dark:text-white outline-none focus:border-brand-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5 uppercase tracking-wider">
+                  Adresse Email <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="email"
+                  required
+                  placeholder="ex: alain@dashmeals.cd"
+                  value={subAdminFormData.email}
+                  onChange={(e) => setSubAdminFormData(prev => ({ ...prev, email: e.target.value }))}
+                  className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm font-semibold text-slate-900 dark:text-white outline-none focus:border-brand-500"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5 uppercase tracking-wider">
+                  Numéro de Téléphone
+                </label>
+                <input
+                  type="text"
+                  placeholder="ex: +243 890 123 456"
+                  value={subAdminFormData.phone_number}
+                  onChange={(e) => setSubAdminFormData(prev => ({ ...prev, phone_number: e.target.value }))}
+                  className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm font-semibold text-slate-900 dark:text-white outline-none focus:border-brand-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5 uppercase tracking-wider">
+                  Intitulé du Rôle / Poste
+                </label>
+                <input
+                  type="text"
+                  placeholder="ex: Gestionnaire Paiements & Abonnements"
+                  value={subAdminFormData.role_title}
+                  onChange={(e) => setSubAdminFormData(prev => ({ ...prev, role_title: e.target.value }))}
+                  className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm font-semibold text-slate-900 dark:text-white outline-none focus:border-brand-500"
+                />
+              </div>
+            </div>
+
+            {/* Mot de Passe d'Accès */}
+            <div className="p-4 bg-brand-500/5 dark:bg-brand-500/10 border border-brand-500/20 rounded-2xl space-y-2">
+              <div className="flex justify-between items-center">
+                <label className="block text-xs font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-1.5">
+                  <Lock size={14} className="text-brand-600 dark:text-brand-400" />
+                  <span>Mot de Passe d'Accès <span className="text-red-500">*</span></span>
+                </label>
+                <button
+                  type="button"
+                  onClick={handleGenerateRandomPassword}
+                  className="text-[10px] font-black text-brand-600 dark:text-brand-400 hover:underline uppercase tracking-wider flex items-center gap-1"
+                >
+                  <RefreshCw size={11} /> Générer auto
+                </button>
+              </div>
+
+              <div className="relative">
+                <input
+                  type={showSubAdminPassword ? "text" : "password"}
+                  required
+                  placeholder="Mot de passe pour se connecter"
+                  value={subAdminFormData.password}
+                  onChange={(e) => setSubAdminFormData(prev => ({ ...prev, password: e.target.value }))}
+                  className="w-full pl-4 pr-10 py-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm font-mono font-bold text-slate-900 dark:text-white outline-none focus:border-brand-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowSubAdminPassword(!showSubAdminPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1"
+                  title={showSubAdminPassword ? "Masquer" : "Afficher"}
+                >
+                  {showSubAdminPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+              <p className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">
+                Le sous-admin utilisera son email <strong>{subAdminFormData.email || "ex: email@dashmeals.cd"}</strong> et ce mot de passe pour se connecter.
+              </p>
+            </div>
+
+            {/* Selection of Permissions */}
+            <div>
+              <label className="block text-xs font-extrabold text-slate-900 dark:text-white mb-2 uppercase tracking-wider flex items-center justify-between">
+                <span>Modules & Actions Autorisés</span>
+                <span className="text-[10px] text-brand-600 dark:text-brand-400 font-bold">
+                  {subAdminFormData.permissions.length} sur {PERMISSION_MODULES.length} sélectionnés
+                </span>
+              </label>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-60 overflow-y-auto p-1 custom-scrollbar">
+                {PERMISSION_MODULES.map((mod) => {
+                  const isChecked = subAdminFormData.permissions.includes(mod.id);
+                  const Icon = mod.icon;
+                  return (
+                    <div
+                      key={mod.id}
+                      onClick={() => togglePermission(mod.id)}
+                      className={`p-3.5 rounded-2xl border-2 cursor-pointer transition-all flex items-start space-x-3 ${
+                        isChecked
+                          ? 'bg-brand-500/5 dark:bg-brand-500/10 border-brand-500 shadow-sm'
+                          : 'bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-700/60 hover:border-slate-300'
+                      }`}
+                    >
+                      <div className={`p-2 rounded-xl shrink-0 mt-0.5 border ${mod.color}`}>
+                        <Icon size={16} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between">
+                          <h5 className="text-xs font-extrabold text-slate-900 dark:text-white truncate">
+                            {mod.label}
+                          </h5>
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => {}}
+                            className="h-4 w-4 text-brand-600 rounded border-slate-300 focus:ring-brand-500 cursor-pointer"
+                          />
+                        </div>
+                        <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1 line-clamp-2 leading-relaxed">
+                          {mod.desc}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="pt-4 border-t border-slate-200 dark:border-slate-800 flex items-center justify-end space-x-3">
+              <button
+                type="button"
+                onClick={() => setSubAdminModal({ isOpen: false, subAdmin: null })}
+                className="px-5 py-2.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold text-xs rounded-xl transition-all"
+              >
+                Annuler
+              </button>
+              <button
+                type="submit"
+                className="px-6 py-2.5 bg-brand-600 hover:bg-brand-700 text-white font-extrabold text-xs rounded-xl shadow-lg shadow-brand-500/25 transition-all active:scale-95 flex items-center space-x-2"
+              >
+                <ShieldCheck size={16} />
+                <span>{subAdminModal.subAdmin ? 'Enregistrer les modifications' : 'Créer le Sous-Admin'}</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    );
+  };
+
+  const renderSubAdmins = () => {
+    const filteredSubAdmins = subAdmins.filter(sa =>
+      sa.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      sa.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      sa.role_title.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+
+    return (
+      <div className="space-y-6 animate-in fade-in duration-300">
+        {/* Banner header */}
+        <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 p-6 md:p-8 rounded-3xl text-white shadow-xl border border-slate-800 relative overflow-hidden flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+          <div className="relative z-10 max-w-xl">
+            <div className="inline-flex items-center space-x-2 px-3 py-1 bg-brand-500/20 text-brand-400 border border-brand-500/30 rounded-full text-xs font-bold mb-3">
+              <ShieldCheck size={14} />
+              <span>Gestion des Accès Délégués</span>
+            </div>
+            <h3 className="text-2xl font-black tracking-tight text-white mb-2">
+              Sous-Administrateurs & Permissions
+            </h3>
+            <p className="text-sm text-slate-300 font-medium leading-relaxed">
+              Créez des comptes d'administration restreints avec des droits spécifiques (Paiements, Support client, Validation des restaurants, Modération).
+            </p>
+          </div>
+
+          <button
+            onClick={() => handleOpenSubAdminModal()}
+            className="px-6 py-3.5 bg-gradient-to-r from-brand-600 to-indigo-600 hover:from-brand-500 hover:to-indigo-500 text-white font-black text-xs uppercase tracking-wider rounded-2xl shadow-xl shadow-brand-500/20 transition-all active:scale-95 flex items-center space-x-2 shrink-0 border border-brand-400/30"
+          >
+            <UserPlus size={18} />
+            <span>Nouveau Sous-Admin</span>
+          </button>
+        </div>
+
+        {/* Stats Grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center space-x-4">
+            <div className="p-3 bg-brand-500/10 text-brand-600 dark:text-brand-400 rounded-2xl border border-brand-500/20">
+              <ShieldCheck size={22} />
+            </div>
+            <div>
+              <p className="text-xs text-slate-500 dark:text-slate-400 font-bold uppercase tracking-wider">Sous-Admins Créés</p>
+              <h4 className="text-2xl font-black text-slate-900 dark:text-white mt-0.5">{subAdmins.length}</h4>
+            </div>
+          </div>
+
+          <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center space-x-4">
+            <div className="p-3 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 rounded-2xl border border-emerald-500/20">
+              <CheckCircle size={22} />
+            </div>
+            <div>
+              <p className="text-xs text-slate-500 dark:text-slate-400 font-bold uppercase tracking-wider">Comptes Actifs</p>
+              <h4 className="text-2xl font-black text-slate-900 dark:text-white mt-0.5">
+                {subAdmins.filter(s => s.is_active).length}
+              </h4>
+            </div>
+          </div>
+
+          <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex items-center space-x-4">
+            <div className="p-3 bg-purple-500/10 text-purple-600 dark:text-purple-400 rounded-2xl border border-purple-500/20">
+              <Lock size={22} />
+            </div>
+            <div>
+              <p className="text-xs text-slate-500 dark:text-slate-400 font-bold uppercase tracking-wider">Modules Sécurisés</p>
+              <h4 className="text-2xl font-black text-slate-900 dark:text-white mt-0.5">{PERMISSION_MODULES.length}</h4>
+            </div>
+          </div>
+        </div>
+
+        {/* Search & List */}
+        <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
+          <div className="p-5 border-b border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-slate-50/50 dark:bg-slate-800/30">
+            <div className="relative w-full sm:w-80">
+              <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+              <input
+                type="text"
+                placeholder="Rechercher par nom, email ou rôle..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full pl-10 pr-4 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-medium text-slate-900 dark:text-white outline-none focus:border-brand-500"
+              />
+            </div>
+
+            <div className="text-xs text-slate-500 dark:text-slate-400 font-semibold">
+              Affichage de {filteredSubAdmins.length} sous-administrateur(s)
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-100 dark:bg-slate-800/70 text-slate-500 dark:text-slate-400 font-extrabold uppercase tracking-wider">
+                <tr>
+                  <th className="px-6 py-4">Sous-Administrateur</th>
+                  <th className="px-6 py-4">Rôle / Intitulé</th>
+                  <th className="px-6 py-4">Permissions & Modules Autorisés</th>
+                  <th className="px-6 py-4">Statut</th>
+                  <th className="px-6 py-4 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {filteredSubAdmins.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="p-12 text-center text-slate-400 font-medium">
+                      Aucun sous-administrateur trouvé. Cliquez sur "Nouveau Sous-Admin" pour en créer un.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredSubAdmins.map((sa) => {
+                    const isSimulatingThis = simulatedSubAdmin?.id === sa.id;
+
+                    return (
+                      <tr key={sa.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors">
+                        <td className="px-6 py-4">
+                          <div className="flex items-center space-x-3">
+                            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-brand-600 to-indigo-600 text-white font-black flex items-center justify-center text-sm shadow-sm shrink-0">
+                              {sa.full_name.charAt(0).toUpperCase()}
+                            </div>
+                            <div>
+                              <p className="font-extrabold text-slate-900 dark:text-white text-sm">
+                                {sa.full_name}
+                              </p>
+                              <p className="text-slate-500 dark:text-slate-400 text-xs font-mono">
+                                {sa.email}
+                              </p>
+                              <div className="flex items-center gap-2 mt-1">
+                                <span className="text-[10px] bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 px-2 py-0.5 rounded font-mono border border-slate-200 dark:border-slate-700 flex items-center gap-1">
+                                  <Lock size={10} className="text-brand-500" />
+                                  <span>{sa.password || '••••••••'}</span>
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const textToCopy = `Identifiants Sous-Admin DashMeals:\nEmail: ${sa.email}\nMot de passe: ${sa.password || '••••••••'}`;
+                                    navigator.clipboard.writeText(textToCopy);
+                                    toast.success(`Identifiants de ${sa.full_name} copiés dans le presse-papier !`);
+                                  }}
+                                  className="text-[10px] text-brand-600 dark:text-brand-400 font-bold hover:underline"
+                                  title="Copier les identifiants de connexion"
+                                >
+                                  Copier 📋
+                                </button>
+                              </div>
+                              {sa.phone_number && (
+                                <p className="text-[10px] text-slate-400 font-medium mt-0.5">
+                                  📞 {sa.phone_number}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+
+                        <td className="px-6 py-4">
+                          <span className="font-bold text-slate-800 dark:text-slate-200">
+                            {sa.role_title}
+                          </span>
+                        </td>
+
+                        <td className="px-6 py-4">
+                          <div className="flex flex-wrap gap-1.5 max-w-md">
+                            {(sa.permissions || []).map((p: string) => {
+                              const modInfo = PERMISSION_MODULES.find(m => m.id === p);
+                              return (
+                                <span
+                                  key={p}
+                                  className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-brand-500/10 text-brand-600 dark:text-brand-400 border border-brand-500/20"
+                                >
+                                  {modInfo ? modInfo.label : p}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        </td>
+
+                        <td className="px-6 py-4">
+                          <button
+                            onClick={() => handleToggleSubAdminStatus(sa.id)}
+                            className={`inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider transition-all ${
+                              sa.is_active
+                                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30'
+                                : 'bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-400 border border-slate-300'
+                            }`}
+                          >
+                            {sa.is_active ? '✅ Actif' : '⏸️ Suspendu'}
+                          </button>
+                        </td>
+
+                        <td className="px-6 py-4 text-right space-x-2">
+                          <button
+                            onClick={() => {
+                              if (isSimulatingThis) {
+                                setSimulatedSubAdmin(null);
+                                toast.info("Fin de la simulation sous-admin.");
+                              } else {
+                                setSimulatedSubAdmin(sa);
+                                toast.success(`Mode simulation activé pour : ${sa.full_name}`);
+                              }
+                            }}
+                            className={`px-2.5 py-1.5 rounded-xl text-[10px] font-extrabold uppercase tracking-wider transition-all inline-flex items-center gap-1 ${
+                              isSimulatingThis
+                                ? 'bg-amber-500 text-slate-950 shadow-md font-black'
+                                : 'bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-200'
+                            }`}
+                            title="Tester / Simuler les permissions de ce sous-admin"
+                          >
+                            <ShieldAlert size={12} />
+                            <span>{isSimulatingThis ? 'Stop Test' : 'Tester Rôle'}</span>
+                          </button>
+
+                          <button
+                            onClick={() => handleOpenSubAdminModal(sa)}
+                            className="p-1.5 text-slate-400 hover:text-brand-600 dark:hover:text-brand-400 transition-colors rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"
+                            title="Éditer le sous-admin"
+                          >
+                            <Edit3 size={15} />
+                          </button>
+
+                          <button
+                            onClick={() => handleDeleteSubAdmin(sa.id, sa.full_name)}
+                            className="p-1.5 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 transition-colors rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"
+                            title="Supprimer"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex relative transition-colors duration-300">
       {/* Mobile Overlay */}
@@ -2631,185 +4184,283 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
             </button>
         </div>
         <nav className="flex-1 p-4 space-y-1.5 overflow-y-auto custom-scrollbar">
-            <button 
-                onClick={() => handleNavigation('overview')} 
-                className={`w-full flex items-center space-x-3 px-4 py-3 rounded-2xl transition-all relative overflow-hidden group active:scale-[0.98] ${
-                    activeView === 'overview' 
-                    ? 'bg-gradient-to-r from-brand-650 to-brand-600 bg-brand-600 text-white font-bold shadow-lg shadow-brand-500/15' 
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
-                }`}
-            >
-                {activeView === 'overview' && <div className="absolute inset-y-0 left-0 w-1 bg-white rounded-r-md"></div>}
-                <Activity size={18} className={`transition-transform duration-300 ${activeView === 'overview' ? 'scale-110 text-white' : 'text-slate-500 group-hover:scale-110 group-hover:text-brand-400'}`} /> 
-                <span className="text-sm font-semibold tracking-wide">{t('overview')}</span>
-            </button>
+            {canAccessView('overview') && (
+              <button 
+                  onClick={() => handleNavigation('overview')} 
+                  className={`w-full flex items-center space-x-3 px-4 py-3 rounded-2xl transition-all relative overflow-hidden group active:scale-[0.98] ${
+                      activeView === 'overview' 
+                      ? 'bg-gradient-to-r from-brand-650 to-brand-600 bg-brand-600 text-white font-bold shadow-lg shadow-brand-500/15' 
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
+                  }`}
+              >
+                  {activeView === 'overview' && <div className="absolute inset-y-0 left-0 w-1 bg-white rounded-r-md"></div>}
+                  <Activity size={18} className={`transition-transform duration-300 ${activeView === 'overview' ? 'scale-110 text-white' : 'text-slate-500 group-hover:scale-110 group-hover:text-brand-400'}`} /> 
+                  <span className="text-sm font-semibold tracking-wide">{t('overview')}</span>
+              </button>
+            )}
 
-            <button 
-                onClick={() => handleNavigation('requests')} 
-                className={`w-full flex items-center space-x-3 px-4 py-3 rounded-2xl transition-all relative overflow-hidden group active:scale-[0.98] ${
-                    activeView === 'requests' 
-                    ? 'bg-gradient-to-r from-orange-550 to-orange-600 bg-orange-600 text-white font-bold shadow-lg shadow-orange-500/15' 
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
-                }`}
-            >
-                {activeView === 'requests' && <div className="absolute inset-y-0 left-0 w-1 bg-white rounded-r-md"></div>}
-                <Bell size={18} className={`transition-transform duration-300 ${activeView === 'requests' ? 'scale-110 text-white' : 'text-slate-500 group-hover:scale-110 group-hover:text-orange-400'}`} /> 
-                <span className="text-sm font-semibold tracking-wide">Demandes</span>
-                {(stats.pendingVerifications + stats.subscriptionRequests) > 0 && (
-                    <span className="bg-white text-orange-600 text-[9px] font-black px-2 py-0.5 rounded-full ml-auto animate-pulse">
-                        {stats.pendingVerifications + stats.subscriptionRequests}
+            {canAccessView('requests') && (
+              <button 
+                  onClick={() => handleNavigation('requests')} 
+                  className={`w-full flex items-center space-x-3 px-4 py-3 rounded-2xl transition-all relative overflow-hidden group active:scale-[0.98] ${
+                      activeView === 'requests' 
+                      ? 'bg-gradient-to-r from-orange-550 to-orange-600 bg-orange-600 text-white font-bold shadow-lg shadow-orange-500/15' 
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
+                  }`}
+              >
+                  {activeView === 'requests' && <div className="absolute inset-y-0 left-0 w-1 bg-white rounded-r-md"></div>}
+                  <Bell size={18} className={`transition-transform duration-300 ${activeView === 'requests' ? 'scale-110 text-white' : 'text-slate-500 group-hover:scale-110 group-hover:text-orange-400'}`} /> 
+                  <span className="text-sm font-semibold tracking-wide">Demandes</span>
+                  {(stats.pendingVerifications + stats.subscriptionRequests) > 0 && (
+                      <span className="bg-white text-orange-600 text-[9px] font-black px-2 py-0.5 rounded-full ml-auto animate-pulse">
+                          {stats.pendingVerifications + stats.subscriptionRequests}
+                      </span>
+                  )}
+              </button>
+            )}
+
+            {canAccessView('users') && (
+              <button 
+                  onClick={() => handleNavigation('users')} 
+                  className={`w-full flex items-center space-x-3 px-4 py-3 rounded-2xl transition-all relative overflow-hidden group active:scale-[0.98] ${
+                      activeView === 'users' 
+                      ? 'bg-gradient-to-r from-brand-650 to-brand-600 bg-brand-600 text-white font-bold shadow-lg shadow-brand-500/15' 
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
+                  }`}
+              >
+                  {activeView === 'users' && <div className="absolute inset-y-0 left-0 w-1 bg-white rounded-r-md"></div>}
+                  <Users size={18} className={`transition-transform duration-300 ${activeView === 'users' ? 'scale-110 text-white' : 'text-slate-500 group-hover:scale-110 group-hover:text-brand-400'}`} /> 
+                  <span className="text-sm font-semibold tracking-wide">Utilisateurs</span>
+              </button>
+            )}
+
+            {canAccessView('subadmins') && (
+              <button 
+                  onClick={() => handleNavigation('subadmins')} 
+                  className={`w-full flex items-center space-x-3 px-4 py-3 rounded-2xl transition-all relative overflow-hidden group active:scale-[0.98] ${
+                      activeView === 'subadmins' 
+                      ? 'bg-gradient-to-r from-brand-650 to-brand-600 bg-brand-600 text-white font-bold shadow-lg shadow-brand-500/15' 
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
+                  }`}
+              >
+                  {activeView === 'subadmins' && <div className="absolute inset-y-0 left-0 w-1 bg-white rounded-r-md"></div>}
+                  <ShieldCheck size={18} className={`transition-transform duration-300 ${activeView === 'subadmins' ? 'scale-110 text-white' : 'text-slate-500 group-hover:scale-110 group-hover:text-brand-400'}`} /> 
+                  <span className="text-sm font-semibold tracking-wide">Sous-Admins</span>
+                  {subAdmins.length > 0 && (
+                    <span className="bg-sky-500/20 text-sky-400 border border-sky-500/30 text-[9px] font-black px-2 py-0.5 rounded-full ml-auto">
+                      {subAdmins.length}
                     </span>
-                )}
-            </button>
+                  )}
+              </button>
+            )}
 
-            <button 
-                onClick={() => handleNavigation('users')} 
-                className={`w-full flex items-center space-x-3 px-4 py-3 rounded-2xl transition-all relative overflow-hidden group active:scale-[0.98] ${
-                    activeView === 'users' 
-                    ? 'bg-gradient-to-r from-brand-650 to-brand-600 bg-brand-600 text-white font-bold shadow-lg shadow-brand-500/15' 
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
-                }`}
-            >
-                {activeView === 'users' && <div className="absolute inset-y-0 left-0 w-1 bg-white rounded-r-md"></div>}
-                <Users size={18} className={`transition-transform duration-300 ${activeView === 'users' ? 'scale-110 text-white' : 'text-slate-500 group-hover:scale-110 group-hover:text-brand-400'}`} /> 
-                <span className="text-sm font-semibold tracking-wide">Utilisateurs</span>
-            </button>
+            {canAccessView('restaurants') && (
+              <button 
+                  onClick={() => handleNavigation('restaurants')} 
+                  className={`w-full flex items-center space-x-3 px-4 py-3 rounded-2xl transition-all relative overflow-hidden group active:scale-[0.98] ${
+                      activeView === 'restaurants' 
+                      ? 'bg-gradient-to-r from-brand-650 to-brand-600 bg-brand-600 text-white font-bold shadow-lg shadow-brand-500/15' 
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
+                  }`}
+              >
+                  {activeView === 'restaurants' && <div className="absolute inset-y-0 left-0 w-1 bg-white rounded-r-md"></div>}
+                  <Store size={18} className={`transition-transform duration-300 ${activeView === 'restaurants' ? 'scale-110 text-white' : 'text-slate-500 group-hover:scale-110 group-hover:text-brand-400'}`} /> 
+                  <span className="text-sm font-semibold tracking-wide">{t('restaurants')}</span>
+              </button>
+            )}
 
-            <button 
-                onClick={() => handleNavigation('restaurants')} 
-                className={`w-full flex items-center space-x-3 px-4 py-3 rounded-2xl transition-all relative overflow-hidden group active:scale-[0.98] ${
-                    activeView === 'restaurants' 
-                    ? 'bg-gradient-to-r from-brand-650 to-brand-600 bg-brand-600 text-white font-bold shadow-lg shadow-brand-500/15' 
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
-                }`}
-            >
-                {activeView === 'restaurants' && <div className="absolute inset-y-0 left-0 w-1 bg-white rounded-r-md"></div>}
-                <Store size={18} className={`transition-transform duration-300 ${activeView === 'restaurants' ? 'scale-110 text-white' : 'text-slate-500 group-hover:scale-110 group-hover:text-brand-400'}`} /> 
-                <span className="text-sm font-semibold tracking-wide">{t('restaurants')}</span>
-            </button>
+            {canAccessView('subscriptions') && (
+              <button 
+                  onClick={() => handleNavigation('subscriptions')} 
+                  className={`w-full flex items-center space-x-3 px-4 py-3 rounded-2xl transition-all relative overflow-hidden group active:scale-[0.98] ${
+                      activeView === 'subscriptions' 
+                      ? 'bg-gradient-to-r from-brand-650 to-brand-600 bg-brand-600 text-white font-bold shadow-lg shadow-brand-500/15' 
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
+                  }`}
+              >
+                  {activeView === 'subscriptions' && <div className="absolute inset-y-0 left-0 w-1 bg-white rounded-r-md"></div>}
+                  <CreditCard size={18} className={`transition-transform duration-300 ${activeView === 'subscriptions' ? 'scale-110 text-white' : 'text-slate-500 group-hover:scale-110 group-hover:text-brand-400'}`} /> 
+                  <span className="text-sm font-semibold tracking-wide">Paiements Abonnements</span>
+                  {restaurants.filter(r => r.subscriptionStatus === 'cancelled' && r.subscriptionEndDate && new Date(r.subscriptionEndDate).getTime() > new Date().getTime()).length > 0 && (
+                    <span className="bg-amber-500 text-white text-[9px] font-black px-2 py-0.5 rounded-full ml-auto animate-pulse">
+                      {restaurants.filter(r => r.subscriptionStatus === 'cancelled' && r.subscriptionEndDate && new Date(r.subscriptionEndDate).getTime() > new Date().getTime()).length}
+                    </span>
+                  )}
+              </button>
+            )}
 
-            <button 
-                onClick={() => handleNavigation('publications')} 
-                className={`w-full flex items-center space-x-3 px-4 py-3 rounded-2xl transition-all relative overflow-hidden group active:scale-[0.98] ${
-                    activeView === 'publications' 
-                    ? 'bg-gradient-to-r from-brand-650 to-brand-600 bg-brand-600 text-white font-bold shadow-lg shadow-brand-500/15' 
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
-                }`}
-            >
-                {activeView === 'publications' && <div className="absolute inset-y-0 left-0 w-1 bg-white rounded-r-md"></div>}
-                <Database size={18} className={`transition-transform duration-300 ${activeView === 'publications' ? 'scale-110 text-white' : 'text-slate-500 group-hover:scale-110 group-hover:text-brand-400'}`} /> 
-                <span className="text-sm font-semibold tracking-wide">Publications</span>
-            </button>
+            {canAccessView('publications') && (
+              <button 
+                  onClick={() => handleNavigation('publications')} 
+                  className={`w-full flex items-center space-x-3 px-4 py-3 rounded-2xl transition-all relative overflow-hidden group active:scale-[0.98] ${
+                      activeView === 'publications' 
+                      ? 'bg-gradient-to-r from-brand-650 to-brand-600 bg-brand-600 text-white font-bold shadow-lg shadow-brand-500/15' 
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
+                  }`}
+              >
+                  {activeView === 'publications' && <div className="absolute inset-y-0 left-0 w-1 bg-white rounded-r-md"></div>}
+                  <Database size={18} className={`transition-transform duration-300 ${activeView === 'publications' ? 'scale-110 text-white' : 'text-slate-500 group-hover:scale-110 group-hover:text-brand-400'}`} /> 
+                  <span className="text-sm font-semibold tracking-wide">Publications</span>
+              </button>
+            )}
 
-            <button 
-                onClick={() => handleNavigation('support')} 
-                className={`w-full flex items-center space-x-3 px-4 py-3 rounded-2xl transition-all relative overflow-hidden group active:scale-[0.98] ${
-                    activeView === 'support' 
-                    ? 'bg-gradient-to-r from-brand-650 to-brand-600 bg-brand-600 text-white font-bold shadow-lg shadow-brand-500/15' 
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
-                }`}
-            >
-                {activeView === 'support' && <div className="absolute inset-y-0 left-0 w-1 bg-white rounded-r-md"></div>}
-                <Mail size={18} className={`transition-transform duration-300 ${activeView === 'support' ? 'scale-110 text-white' : 'text-slate-500 group-hover:scale-110 group-hover:text-brand-400'}`} /> 
-                <span className="text-sm font-semibold tracking-wide">{t('support')}</span>
-                {stats.openTickets > 0 && <span className="bg-red-500 text-white text-[9px] font-black px-2 py-0.5 rounded-full ml-auto animate-pulse">{stats.openTickets}</span>}
-            </button>
+            {canAccessView('support') && (
+              <button 
+                  onClick={() => handleNavigation('support')} 
+                  className={`w-full flex items-center space-x-3 px-4 py-3 rounded-2xl transition-all relative overflow-hidden group active:scale-[0.98] ${
+                      activeView === 'support' 
+                      ? 'bg-gradient-to-r from-brand-650 to-brand-600 bg-brand-600 text-white font-bold shadow-lg shadow-brand-500/15' 
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
+                  }`}
+              >
+                  {activeView === 'support' && <div className="absolute inset-y-0 left-0 w-1 bg-white rounded-r-md"></div>}
+                  <Mail size={18} className={`transition-transform duration-300 ${activeView === 'support' ? 'scale-110 text-white' : 'text-slate-500 group-hover:scale-110 group-hover:text-brand-400'}`} /> 
+                  <span className="text-sm font-semibold tracking-wide">{t('support')}</span>
+                  {stats.openTickets > 0 && <span className="bg-red-500 text-white text-[9px] font-black px-2 py-0.5 rounded-full ml-auto animate-pulse">{stats.openTickets}</span>}
+              </button>
+            )}
 
-            <button 
-                onClick={() => handleNavigation('messages')} 
-                className={`w-full flex items-center space-x-3 px-4 py-3 rounded-2xl transition-all relative overflow-hidden group active:scale-[0.98] ${
-                    activeView === 'messages' 
-                    ? 'bg-gradient-to-r from-brand-650 to-brand-600 bg-brand-600 text-white font-bold shadow-lg shadow-brand-500/15' 
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
-                }`}
-            >
-                {activeView === 'messages' && <div className="absolute inset-y-0 left-0 w-1 bg-white rounded-r-md"></div>}
-                <MessageSquare size={18} className={`transition-transform duration-300 ${activeView === 'messages' ? 'scale-110 text-white' : 'text-slate-500 group-hover:scale-110 group-hover:text-brand-400'}`} /> 
-                <span className="text-sm font-semibold tracking-wide">Messages</span>
-            </button>
+            {canAccessView('messages') && (
+              <button 
+                  onClick={() => handleNavigation('messages')} 
+                  className={`w-full flex items-center space-x-3 px-4 py-3 rounded-2xl transition-all relative overflow-hidden group active:scale-[0.98] ${
+                      activeView === 'messages' 
+                      ? 'bg-gradient-to-r from-brand-650 to-brand-600 bg-brand-600 text-white font-bold shadow-lg shadow-brand-500/15' 
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
+                  }`}
+              >
+                  {activeView === 'messages' && <div className="absolute inset-y-0 left-0 w-1 bg-white rounded-r-md"></div>}
+                  <MessageSquare size={18} className={`transition-transform duration-300 ${activeView === 'messages' ? 'scale-110 text-white' : 'text-slate-500 group-hover:scale-110 group-hover:text-brand-400'}`} /> 
+                  <span className="text-sm font-semibold tracking-wide">Messages</span>
+              </button>
+            )}
 
-            <button 
-                onClick={() => handleNavigation('verifications')} 
-                className={`w-full flex items-center space-x-3 px-4 py-3 rounded-2xl transition-all relative overflow-hidden group active:scale-[0.98] ${
-                    activeView === 'verifications' 
-                    ? 'bg-gradient-to-r from-brand-650 to-brand-600 bg-brand-600 text-white font-bold shadow-lg shadow-brand-500/15' 
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
-                }`}
-            >
-                {activeView === 'verifications' && <div className="absolute inset-y-0 left-0 w-1 bg-white rounded-r-md"></div>}
-                <Shield size={18} className={`transition-transform duration-300 ${activeView === 'verifications' ? 'scale-110 text-white' : 'text-slate-500 group-hover:scale-110 group-hover:text-brand-400'}`} /> 
-                <span className="text-sm font-semibold tracking-wide">Vérifications</span>
-                {stats.pendingVerifications > 0 && <span className="bg-red-500 text-white text-[9px] font-black px-2 py-0.5 rounded-full ml-auto animate-pulse">{stats.pendingVerifications}</span>}
-            </button>
+            {canAccessView('verifications') && (
+              <button 
+                  onClick={() => handleNavigation('verifications')} 
+                  className={`w-full flex items-center space-x-3 px-4 py-3 rounded-2xl transition-all relative overflow-hidden group active:scale-[0.98] ${
+                      activeView === 'verifications' 
+                      ? 'bg-gradient-to-r from-brand-650 to-brand-600 bg-brand-600 text-white font-bold shadow-lg shadow-brand-500/15' 
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
+                  }`}
+              >
+                  {activeView === 'verifications' && <div className="absolute inset-y-0 left-0 w-1 bg-white rounded-r-md"></div>}
+                  <Shield size={18} className={`transition-transform duration-300 ${activeView === 'verifications' ? 'scale-110 text-white' : 'text-slate-500 group-hover:scale-110 group-hover:text-brand-400'}`} /> 
+                  <span className="text-sm font-semibold tracking-wide">Vérifications</span>
+                  {stats.pendingVerifications > 0 && <span className="bg-red-500 text-white text-[9px] font-black px-2 py-0.5 rounded-full ml-auto animate-pulse">{stats.pendingVerifications}</span>}
+              </button>
+            )}
 
-            <button 
-                onClick={() => handleNavigation('settings')} 
-                className={`w-full flex items-center space-x-3 px-4 py-3 rounded-2xl transition-all relative overflow-hidden group active:scale-[0.98] ${
-                    activeView === 'settings' 
-                    ? 'bg-gradient-to-r from-brand-650 to-brand-600 bg-brand-600 text-white font-bold shadow-lg shadow-brand-500/15' 
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
-                }`}
-            >
-                {activeView === 'settings' && <div className="absolute inset-y-0 left-0 w-1 bg-white rounded-r-md"></div>}
-                <Settings size={18} className={`transition-transform duration-300 ${activeView === 'settings' ? 'scale-110 text-white' : 'text-slate-500 group-hover:scale-110 group-hover:text-brand-400'}`} /> 
-                <span className="text-sm font-semibold tracking-wide text-sm font-semibold tracking-wide">Paramètres App</span>
-            </button>
+            {canAccessView('settings') && (
+              <button 
+                  onClick={() => handleNavigation('settings')} 
+                  className={`w-full flex items-center space-x-3 px-4 py-3 rounded-2xl transition-all relative overflow-hidden group active:scale-[0.98] ${
+                      activeView === 'settings' 
+                      ? 'bg-gradient-to-r from-brand-650 to-brand-600 bg-brand-600 text-white font-bold shadow-lg shadow-brand-500/15' 
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
+                  }`}
+              >
+                  {activeView === 'settings' && <div className="absolute inset-y-0 left-0 w-1 bg-white rounded-r-md"></div>}
+                  <Settings size={18} className={`transition-transform duration-300 ${activeView === 'settings' ? 'scale-110 text-white' : 'text-slate-500 group-hover:scale-110 group-hover:text-brand-400'}`} /> 
+                  <span className="text-sm font-semibold tracking-wide">Paramètres App</span>
+              </button>
+            )}
         </nav>
-        <div className="p-4 border-t border-[#1e293b]/60">
-            <div className="mb-4">
-                <label className="text-[9px] text-slate-500 mb-1.5 block uppercase font-extrabold tracking-wider">{t('appearance')}</label>
-                <div className="flex bg-[#0a101f] rounded-xl p-1.5 border border-[#1e293b]/40">
+        <div className="p-4 border-t border-[#1e293b]/60 relative">
+            {isBottomMenuOpen && (
+              <div className="absolute bottom-full left-3 right-3 mb-2 p-4 bg-[#0a101f] border border-[#1e293b] rounded-2xl shadow-2xl z-50 space-y-4 animate-in slide-in-from-bottom-2 duration-200">
+                <div>
+                  <label className="text-[9px] text-slate-400 mb-1.5 block uppercase font-extrabold tracking-wider">{t('appearance')}</label>
+                  <div className="flex bg-[#131c31] rounded-xl p-1.5 border border-[#1e293b]/60">
                     <button 
-                        onClick={() => setTheme && setTheme('light')}
-                        className={`flex-1 py-2 rounded-lg text-xs font-bold flex items-center justify-center transition-all ${theme === 'light' ? 'bg-[#1e293b] text-white shadow-md' : 'text-[#64748b] hover:text-white'}`}
+                      onClick={() => setTheme && setTheme('light')}
+                      className={`flex-1 py-2 rounded-lg text-xs font-bold flex items-center justify-center transition-all ${theme === 'light' ? 'bg-[#1e293b] text-white shadow-md' : 'text-[#64748b] hover:text-white'}`}
                     >
-                        <Sun size={13} className="mr-1.5"/> Clair
+                      <Sun size={13} className="mr-1.5"/> Clair
                     </button>
                     <button 
-                        onClick={() => setTheme && setTheme('dark')}
-                        className={`flex-1 py-2 rounded-lg text-xs font-bold flex items-center justify-center transition-all ${theme === 'dark' ? 'bg-[#1e293b] text-white shadow-md font-bold' : 'text-[#64748b] hover:text-white'}`}
+                      onClick={() => setTheme && setTheme('dark')}
+                      className={`flex-1 py-2 rounded-lg text-xs font-bold flex items-center justify-center transition-all ${theme === 'dark' ? 'bg-[#1e293b] text-white shadow-md font-bold' : 'text-[#64748b] hover:text-white'}`}
                     >
-                        <Moon size={13} className="mr-1.5"/> Sombre
+                      <Moon size={13} className="mr-1.5"/> Sombre
                     </button>
+                  </div>
                 </div>
-            </div>
 
-            {font && setFont && (
-                <div className="mb-4">
-                    <label className="text-[9px] text-slate-500 mb-1.5 block uppercase font-extrabold tracking-wider">Police</label>
+                {font && setFont && (
+                  <div>
+                    <label className="text-[9px] text-slate-400 mb-1.5 block uppercase font-extrabold tracking-wider">Police</label>
                     <select 
-                        value={font} 
-                        onChange={(e) => setFont(e.target.value as AppFont)}
-                        className="w-full bg-[#0a101f] text-slate-300 text-xs p-2.5 rounded-xl border border-[#1e293b]/40 outline-none focus:border-brand-500 font-medium"
+                      value={font} 
+                      onChange={(e) => setFont(e.target.value as AppFont)}
+                      className="w-full bg-[#131c31] text-slate-300 text-xs p-2.5 rounded-xl border border-[#1e293b]/60 outline-none focus:border-brand-500 font-medium"
                     >
-                        <option value="facebook">Facebook (Défaut)</option>
-                        <option value="inter">Inter</option>
-                        <option value="roboto">Roboto</option>
-                        <option value="opensans">Open Sans</option>
-                        <option value="lato font-medium">Lato</option>
-                        <option value="montserrat">Montserrat</option>
-                        <option value="poppins">Poppins</option>
-                        <option value="quicksand">Quicksand</option>
-                        <option value="playfair">Playfair Display</option>
+                      <option value="facebook">Facebook (Défaut)</option>
+                      <option value="inter">Inter</option>
+                      <option value="roboto">Roboto</option>
+                      <option value="opensans">Open Sans</option>
+                      <option value="lato font-medium">Lato</option>
+                      <option value="montserrat">Montserrat</option>
+                      <option value="poppins">Poppins</option>
+                      <option value="quicksand">Quicksand</option>
+                      <option value="playfair">Playfair Display</option>
                     </select>
+                  </div>
+                )}
+
+                <div className="pt-2 border-t border-[#1e293b]/60 space-y-1.5">
+                  {onGoToClient && (
+                    <button 
+                      onClick={onGoToClient} 
+                      className="w-full flex items-center justify-start space-x-2.5 text-sky-300 hover:text-white hover:bg-sky-950/40 px-3 py-2 rounded-xl transition-all font-semibold text-xs border border-transparent hover:border-sky-900/30 active:scale-95"
+                    >
+                      <ShoppingBag size={14} /> <span>Espace Client</span>
+                    </button>
+                  )}
+                  <button onClick={onLogout} className="w-full flex items-center justify-start space-x-2.5 text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 px-3 py-2 rounded-xl transition-all font-semibold text-xs border border-transparent hover:border-rose-900/30 active:scale-95">
+                    <LogOut size={14} /> <span>{t('logout')}</span>
+                  </button>
                 </div>
+              </div>
             )}
-            {onGoToClient && (
-                <button 
-                    onClick={onGoToClient} 
-                    className="w-full flex items-center justify-center space-x-2 text-sky-200 hover:text-white hover:bg-sky-950/20 p-2.5 rounded-xl transition-all font-semibold text-xs border border-transparent hover:border-sky-900/10 mb-2 active:scale-95"
-                >
-                    <ShoppingBag size={14} /> <span>Espace Client</span>
-                </button>
-            )}
-            <button onClick={onLogout} className="w-full flex items-center justify-center space-x-2 text-rose-400 hover:text-rose-300 hover:bg-rose-950/20 p-2.5 rounded-xl transition-all font-semibold text-xs border border-transparent hover:border-rose-900/10 active:scale-95">
-                <LogOut size={14} /> <span>{t('logout')}</span>
+
+            <button
+              onClick={() => setIsBottomMenuOpen(prev => !prev)}
+              className="w-full flex items-center justify-between px-4 py-3 bg-[#0a101f] hover:bg-[#131c31] border border-[#1e293b]/60 rounded-2xl text-slate-300 transition-all group active:scale-[0.98]"
+            >
+              <div className="flex items-center space-x-2.5">
+                <Sliders size={16} className="text-brand-400 group-hover:rotate-45 transition-transform" />
+                <span className="text-xs font-bold tracking-wide">Options & Compte</span>
+              </div>
+              <ChevronUp size={16} className={`text-slate-400 transition-transform duration-300 ${isBottomMenuOpen ? 'rotate-180' : ''}`} />
             </button>
         </div>
       </aside>
 
       {/* Main Content */}
       <main className="flex-1 md:ml-64 p-4 md:p-8 transition-all duration-300 overflow-y-auto h-screen">
+         {simulatedSubAdmin && (
+           <div className="mb-6 p-4 bg-amber-500/15 border-2 border-amber-500/40 rounded-3xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-lg backdrop-blur-md">
+             <div className="flex items-center space-x-3">
+               <div className="p-2.5 bg-amber-500 text-slate-950 rounded-2xl font-black">
+                 <ShieldCheck size={20} />
+               </div>
+               <div>
+                 <p className="text-xs font-black text-amber-500 uppercase tracking-wider">Mode Simulation Sous-Admin Actif</p>
+                 <p className="text-sm font-bold text-slate-700 dark:text-slate-200">
+                   Compte: <span className="text-amber-600 dark:text-amber-400 font-extrabold">{simulatedSubAdmin.name}</span> ({simulatedSubAdmin.role})
+                 </p>
+               </div>
+             </div>
+             <button 
+               onClick={() => setSimulatedSubAdmin(null)}
+               className="w-full sm:w-auto px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs rounded-2xl transition-all shadow-md active:scale-95 flex items-center justify-center space-x-2"
+             >
+               <span>Quitter la simulation</span>
+             </button>
+           </div>
+         )}
+
          <div className="md:hidden mb-6 flex items-center justify-between bg-white dark:bg-gray-800 p-4 -mx-4 -mt-4 border-b border-gray-100 dark:border-gray-700 sticky top-0 z-30">
           <div className="flex items-center space-x-3">
             <button 
@@ -2850,11 +4501,13 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
                  <h2 className="text-xl md:text-2xl font-bold text-gray-900 dark:text-white">
                      {activeView === 'overview' && 'Tableau de bord'}
                      {activeView === 'users' && 'Utilisateurs'}
+                     {activeView === 'subadmins' && 'Sous-Admins & Permissions'}
                      {activeView === 'restaurants' && 'Restaurants Partenaires'}
                      {activeView === 'publications' && 'Publications'}
                      {activeView === 'verifications' && 'Vérifications'}
                      {activeView === 'support' && 'Support Client'}
                      {activeView === 'messages' && 'Messages Commandes'}
+                     {activeView === 'subscriptions' && 'Abonnements & Paiements DashMeals Pay'}
                      {activeView === 'settings' && "Paramètres de l'Application"}
                  </h2>
                  <p className="text-gray-500 dark:text-gray-400 text-sm">Bienvenue, {user.name}</p>
@@ -2980,13 +4633,15 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
                </div>
            </div>
          )}
-         {activeView === 'users' && renderUsers()}
-         {activeView === 'restaurants' && renderRestaurants()}
-         {activeView === 'publications' && renderPublications()}
-         {activeView === 'verifications' && renderVerifications()}
-         {activeView === 'support' && renderSupport()}
-         {activeView === 'messages' && renderMessages()}
-         {activeView === 'settings' && (
+         {activeView === 'users' && canAccessView('users') && renderUsers()}
+         {activeView === 'subadmins' && canAccessView('subadmins') && renderSubAdmins()}
+         {activeView === 'restaurants' && canAccessView('restaurants') && renderRestaurants()}
+         {activeView === 'subscriptions' && canAccessView('subscriptions') && renderSubscriptions()}
+         {activeView === 'publications' && canAccessView('publications') && renderPublications()}
+         {activeView === 'verifications' && canAccessView('verifications') && renderVerifications()}
+         {activeView === 'support' && canAccessView('support') && renderSupport()}
+         {activeView === 'messages' && canAccessView('messages') && renderMessages()}
+         {activeView === 'settings' && canAccessView('settings') && (
             <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden animate-in fade-in">
               <div className="p-6 border-b border-gray-100 dark:border-gray-700">
                 <h3 className="font-bold text-lg text-gray-800 dark:text-white">Paramètres Généraux</h3>
@@ -3052,7 +4707,7 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
                       className="w-full p-4 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-xl text-sm focus:ring-2 focus:ring-brand-500 outline-none dark:text-white font-mono font-bold text-brand-600 dark:text-brand-400"
                       placeholder="2850" style={{ opacity: isPrincipalAdmin ? 1 : 0.6 }}
                     />
-                    <p className="text-[10px] text-gray-400 mt-1">Configure le taux de change global de l'application appliqué lors du paiement KPay (conversion automatique des dollars USD en francs congolais CDF).</p>
+                    <p className="text-[10px] text-gray-400 mt-1">Configure le taux de change global de l'application appliqué lors du paiement DashMeals Pay (conversion automatique des dollars USD en francs congolais CDF).</p>
                   </div>
                 </div>
                 <div className="flex justify-end pt-4">
@@ -3245,6 +4900,253 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
               </div>
           )}
 
+          {/* Refund Modal */}
+          {refundModal.isOpen && refundModal.restaurant && isPrincipalAdmin && (() => {
+              const r = refundModal.restaurant;
+              const basePrice = r.subscriptionTier === 'enterprise' || r.subscriptionTier === 'elite' ? 99 :
+                                r.subscriptionTier === 'premium' || r.subscriptionTier === 'pro' ? 49 :
+                                r.subscriptionTier === 'basic' ? 29 : 0;
+
+              const endDate = r.subscriptionEndDate ? new Date(r.subscriptionEndDate) : null;
+              const now = new Date();
+              let remainingDays = 30;
+              let consumedDays = 0;
+
+              if (endDate) {
+                  const diffMs = endDate.getTime() - now.getTime();
+                  remainingDays = Math.max(0, Math.min(30, Math.ceil(diffMs / (1000 * 60 * 60 * 24))));
+                  consumedDays = Math.max(0, 30 - remainingDays);
+              }
+
+              // Formula requested: ((Prix / 30) * joursConsommes) + taxes (frais de transaction inclus)
+              const dailyRate = basePrice / 30;
+              const consumedValue = dailyRate * consumedDays;
+              const taxAndFeeRate = 0.025; // 2.5% taxes & DashMeals Pay transaction fees
+              const taxAndFeeAmount = basePrice * taxAndFeeRate;
+              
+              // Net refund = Base Price - Consumed Value - Tax/Fees
+              const netRefundAmount = Math.max(0, basePrice - consumedValue - taxAndFeeAmount);
+
+              const kpayTxRef = `KPAY-REFUND-${Math.floor(100000 + Math.random() * 900000)}`;
+
+              return (
+                  <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
+                      <div className="bg-white dark:bg-gray-800 w-full max-w-lg rounded-2xl sm:rounded-3xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 border border-gray-100 dark:border-gray-700 flex flex-col max-h-[90vh] my-auto">
+                          <div className="p-4 sm:p-5 bg-gradient-to-r from-slate-900 via-indigo-950 to-blue-900 text-white flex justify-between items-center shrink-0">
+                              <div className="flex items-center gap-2.5">
+                                  <div className="p-2 bg-blue-500/20 rounded-xl border border-blue-400/30 backdrop-blur-md shrink-0">
+                                      <RotateCcw size={18} className="text-blue-400" />
+                                  </div>
+                                  <div className="min-w-0">
+                                      <h3 className="font-black text-base sm:text-lg truncate">
+                                          Remboursement DashMeals Pay
+                                      </h3>
+                                      <p className="text-[11px] text-slate-300 font-medium truncate">{r.name} • Calcul selon formule</p>
+                                  </div>
+                              </div>
+                              <button 
+                                  onClick={() => setRefundModal({ isOpen: false, restaurant: null, reason: '', returnToFree: true })} 
+                                  className="p-1.5 hover:bg-white/20 rounded-full text-white transition-colors shrink-0 ml-2"
+                                  title="Fermer"
+                              >
+                                  <X size={20} />
+                              </button>
+                          </div>
+
+                          <div className="p-4 sm:p-6 space-y-3.5 sm:space-y-4 overflow-y-auto flex-1">
+                              {/* Formula Formula Notice */}
+                              <div className="bg-slate-100 dark:bg-slate-700/50 border border-slate-200 dark:border-slate-600 p-3 rounded-xl sm:rounded-2xl text-xs space-y-1">
+                                  <p className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5 text-[11px] sm:text-xs">
+                                      <ShieldCheck size={14} className="text-blue-600 dark:text-blue-400 shrink-0" />
+                                      Formule : Prix - ((Prix / 30) × Jours Consommés) - Taxes & Frais
+                                  </p>
+                                  <p className="text-slate-600 dark:text-slate-300 text-[10px] sm:text-[11px] leading-relaxed">
+                                      Seule la partie inutilisée est restituée, déduction faite des frais de transaction et taxes DashMeals Pay.
+                                  </p>
+                              </div>
+
+                              {/* Transaction Reference Banner */}
+                              <div className="flex items-center justify-between p-2.5 sm:p-3 bg-slate-900 text-white rounded-xl sm:rounded-2xl text-xs">
+                                  <span className="text-slate-400 font-bold uppercase text-[9px] sm:text-[10px]">Réf. Transaction</span>
+                                  <span className="font-mono font-black text-emerald-400 bg-slate-800 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-lg sm:rounded-xl border border-slate-700 text-[11px]">
+                                      {kpayTxRef}
+                                  </span>
+                              </div>
+
+                              {/* Detailed Formula Breakdown */}
+                              <div className="bg-slate-50 dark:bg-slate-700/50 p-3.5 sm:p-4 rounded-xl sm:rounded-2xl border border-slate-200 dark:border-slate-600 space-y-2">
+                                  <div className="flex justify-between items-center text-xs">
+                                      <span className="text-slate-500 dark:text-slate-400 font-bold uppercase text-[9px] sm:text-[10px]">Prix de l'Abonnement</span>
+                                      <span className="font-extrabold text-slate-800 dark:text-slate-200">${basePrice}.00 USD ({r.subscriptionTier?.toUpperCase()})</span>
+                                  </div>
+
+                                  <div className="flex justify-between items-center text-xs">
+                                      <span className="text-slate-500 dark:text-slate-400 font-bold uppercase text-[9px] sm:text-[10px]">Jours Consommés ({consumedDays} j/30)</span>
+                                      <span className="font-mono font-bold text-rose-600 dark:text-rose-400">
+                                          -${consumedValue.toFixed(2)} USD <span className="text-[9px] text-slate-400">(${dailyRate.toFixed(2)}/j)</span>
+                                      </span>
+                                  </div>
+
+                                  <div className="flex justify-between items-center text-xs">
+                                      <span className="text-slate-500 dark:text-slate-400 font-bold uppercase text-[9px] sm:text-[10px]">Taxes & Frais de Service (2.5%)</span>
+                                      <span className="font-mono font-bold text-rose-600 dark:text-rose-400">
+                                          -${taxAndFeeAmount.toFixed(2)} USD
+                                      </span>
+                                  </div>
+
+                                  <div className="flex justify-between items-center text-xs pt-2 border-t-2 border-slate-300 dark:border-slate-500">
+                                      <span className="font-black text-slate-900 dark:text-white uppercase tracking-wider text-[10px] sm:text-[11px]">Net à Rembourser</span>
+                                      <span className="font-black text-emerald-600 dark:text-emerald-400 text-base sm:text-lg">
+                                          ${netRefundAmount.toFixed(2)} USD
+                                      </span>
+                                  </div>
+                              </div>
+
+                              <div>
+                                  <label className="block text-[10px] sm:text-xs font-extrabold text-slate-600 dark:text-slate-300 uppercase tracking-wider mb-1">
+                                      Motif d'annulation
+                                  </label>
+                                  <textarea
+                                      rows={2}
+                                      value={refundModal.reason}
+                                      onChange={(e) => setRefundModal({ ...refundModal, reason: e.target.value })}
+                                      placeholder="Ex: Résiliation anticipée..."
+                                      className="w-full p-2.5 sm:p-3 bg-gray-50 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600 rounded-xl text-xs outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-white"
+                                  />
+                              </div>
+
+                              <div className="flex items-center gap-2.5 p-2.5 sm:p-3 bg-slate-100 dark:bg-slate-700/50 rounded-xl border border-slate-200 dark:border-slate-600">
+                                  <input
+                                      type="checkbox"
+                                      id="returnToFree"
+                                      checked={refundModal.returnToFree}
+                                      onChange={(e) => setRefundModal({ ...refundModal, returnToFree: e.target.checked })}
+                                      className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500 cursor-pointer shrink-0"
+                                  />
+                                  <label htmlFor="returnToFree" className="text-xs font-bold text-slate-700 dark:text-slate-300 cursor-pointer leading-tight">
+                                      Repasser l'établissement au forfait Gratuit
+                                  </label>
+                              </div>
+                          </div>
+
+                          <div className="p-4 sm:p-5 bg-gray-50 dark:bg-gray-800/80 border-t border-gray-100 dark:border-gray-700 shrink-0 flex gap-2.5">
+                              <button 
+                                  onClick={() => setRefundModal({ isOpen: false, restaurant: null, reason: '', returnToFree: true })}
+                                  className="flex-1 py-2.5 sm:py-3 text-slate-600 dark:text-slate-400 font-extrabold hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition-all text-xs uppercase"
+                              >
+                                  Annuler
+                              </button>
+                              <button 
+                                  onClick={async () => {
+                                      if (!refundModal.restaurant) return;
+                                      setLoading(true);
+                                      try {
+                                          const updateData: any = {
+                                              subscription_status: 'refunded',
+                                              ...(refundModal.returnToFree ? {
+                                                  subscription_tier: 'free',
+                                                  subscription_end_date: null
+                                              } : {})
+                                          };
+
+                                          const { error } = await supabase
+                                              .from('restaurants')
+                                              .update(updateData)
+                                              .eq('id', r.id);
+
+                                          if (error) throw error;
+
+                                          // Notifier le partenaire/restaurant (In-app notification + Email)
+                                          const ownerUserId = r.ownerId || (r as any).owner_id;
+                                          if (ownerUserId) {
+                                              try {
+                                                  await supabase.from('notifications').insert({
+                                                      user_id: ownerUserId,
+                                                      restaurant_id: r.id,
+                                                      title: "Remboursement DashMeals Pay Effectué 💸",
+                                                      message: `Votre remboursement DashMeals Pay d'un montant net de $${netRefundAmount.toFixed(2)} USD pour l'établissement "${r.name}" a été traité avec succès (Réf: ${kpayTxRef}).${refundModal.reason ? ` Motif : ${refundModal.reason}` : ''}`,
+                                                      type: 'refund',
+                                                      data: {
+                                                          restaurant_id: r.id,
+                                                          amount: netRefundAmount,
+                                                          tx_ref: kpayTxRef,
+                                                          reason: refundModal.reason,
+                                                          refunded_at: new Date().toISOString()
+                                                      }
+                                                  });
+                                              } catch (notifErr) {
+                                                  console.warn('Notification in-app error:', notifErr);
+                                              }
+
+                                              try {
+                                                  const { data: ownerProfile } = await supabase
+                                                      .from('profiles')
+                                                      .select('email')
+                                                      .eq('id', ownerUserId)
+                                                      .single();
+
+                                                  if (ownerProfile?.email) {
+                                                      await sendSubscriptionRefundEmail(
+                                                          r.name,
+                                                          ownerProfile.email,
+                                                          netRefundAmount,
+                                                          kpayTxRef,
+                                                          refundModal.reason
+                                                      );
+                                                      await sendTransactionInvoiceEmail({ clientEmail: ownerProfile.email, clientName: r.name, restaurantName: r.name, invoiceNumber: 'AVOIR-' + Math.floor(100000 + Math.random() * 900000), invoiceType: 'refund', grossAmount: basePrice, feeAmount: taxAndFeeAmount, netAmount: netRefundAmount, paymentChannel: 'DashMeals Pay Gateway', txRef: kpayTxRef, date: new Date().toISOString(), notes: refundModal.reason ? 'Remboursement au prorata: ' + refundModal.reason : 'Remboursement au prorata (résiliation)' });
+                                                  }
+                                              } catch (emailErr) {
+                                                  console.warn('Notification email error:', emailErr);
+                                              }
+                                          }
+
+                                          // Enregistrer la transaction de remboursement dans le journal DashMeals Pay en temps réel
+                                          const refundTxRecord = {
+                                              id: 'kpay_refund_' + Date.now(),
+                                              txRef: kpayTxRef,
+                                              createdAt: new Date().toISOString(),
+                                              restaurantId: r.id,
+                                              restaurantName: r.name,
+                                              payerName: (r as any).ownerId || r.name,
+                                              type: 'refund',
+                                              grossAmount: -basePrice,
+                                              feeAmount: -taxAndFeeAmount,
+                                              netAmount: -netRefundAmount,
+                                              currency: 'USD',
+                                              status: 'refunded',
+                                              paymentChannel: 'DashMeals Pay Gateway',
+                                              notes: refundModal.reason ? `Remboursement au prorata: ${refundModal.reason}` : 'Remboursement au prorata (résiliation)'
+                                          };
+
+                                          setKpayTransactions(prev => [refundTxRecord, ...prev]);
+
+                                          toast.success(
+                                              `Remboursement DashMeals Pay de ${netRefundAmount.toFixed(2)} USD effectué et notification envoyée (${kpayTxRef}).`, 
+                                              { icon: '💸' }
+                                          );
+
+                                          onRefreshData?.();
+                                          fetchRestaurants();
+                                          setRefundModal({ isOpen: false, restaurant: null, reason: '', returnToFree: true });
+                                      } catch (err: any) {
+                                          console.error('Refund error:', err);
+                                          toast.error('Erreur de remboursement: ' + err.message);
+                                      } finally {
+                                          setLoading(false);
+                                      }
+                                  }}
+                                  disabled={loading}
+                                  className="flex-1 py-2.5 sm:py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-black text-xs uppercase tracking-wider shadow-lg shadow-blue-600/20 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                              >
+                                  {loading && <RefreshCw size={14} className="animate-spin" />}
+                                  Rembourser ${netRefundAmount.toFixed(2)} USD
+                              </button>
+                          </div>
+                      </div>
+                  </div>
+              );
+          })()}
+
           {/* Edit Restaurant Modal */}
           {editRestaurantModal.isOpen && editRestaurantModal.restaurant && isPrincipalAdmin && (
               <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4 overflow-y-auto">
@@ -3433,6 +5335,8 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
                   </div>
               </div>
           )}
+
+        {renderSubAdminModal()}
 
         {/* Confirmation Modal */}
         {confirmModal.isOpen && (

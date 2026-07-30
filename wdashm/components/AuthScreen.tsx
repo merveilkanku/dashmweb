@@ -314,6 +314,60 @@ export const AuthScreen: React.FC<Props> = ({ onLogin, isSupabaseReachable = tru
 
       if (isLogin) {
         // LOGIN
+        // 0. Check if this is a Sub-Admin account
+        let subAdminsList: any[] = [];
+        try {
+          const saved = localStorage.getItem('dashmeals_subadmins');
+          if (saved) subAdminsList = JSON.parse(saved);
+        } catch (e) {}
+
+        // Fallback fetch from Supabase database if list is empty or doesn't have the user
+        const cleanEmail = email.trim().toLowerCase();
+        let matchedSubAdmin = subAdminsList.find(sa => sa.email && sa.email.trim().toLowerCase() === cleanEmail);
+
+        if (!matchedSubAdmin) {
+          try {
+            const { data: dbSubSetting } = await supabase
+              .from('app_settings')
+              .select('value')
+              .eq('id', 'sub_admins')
+              .maybeSingle();
+            if (dbSubSetting?.value) {
+              const parsed = typeof dbSubSetting.value === 'string' ? JSON.parse(dbSubSetting.value) : dbSubSetting.value;
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                subAdminsList = parsed;
+                localStorage.setItem('dashmeals_subadmins', JSON.stringify(parsed));
+                matchedSubAdmin = subAdminsList.find(sa => sa.email && sa.email.trim().toLowerCase() === cleanEmail);
+              }
+            }
+          } catch (e) {}
+        }
+
+        if (matchedSubAdmin) {
+          if (matchedSubAdmin.is_active === false) {
+            throw new Error("Ce compte sous-administrateur a été désactivé par l'Administration.");
+          }
+          if (matchedSubAdmin.password && matchedSubAdmin.password === password) {
+            console.log("✅ [Auth] Connexion sous-admin réussie pour :", matchedSubAdmin.full_name);
+            const subAdminUser: User = {
+              id: matchedSubAdmin.id || `sub-${Date.now()}`,
+              name: matchedSubAdmin.full_name,
+              email: matchedSubAdmin.email,
+              role: 'superadmin',
+              city: 'Kinshasa',
+              phoneNumber: matchedSubAdmin.phone_number || '',
+              simulatedSubAdmin: matchedSubAdmin
+            };
+            localStorage.setItem('dashmeals_subadmin_session', JSON.stringify(matchedSubAdmin));
+            clearTimeout(authTimeout);
+            onLogin(subAdminUser);
+            setLoading(false);
+            return;
+          } else {
+            throw new Error("Mot de passe incorrect pour le compte Sous-Administrateur.");
+          }
+        }
+
         const { error } = await supabase.auth.signInWithPassword({
           email,
           password,
@@ -1154,7 +1208,7 @@ export const AuthScreen: React.FC<Props> = ({ onLogin, isSupabaseReachable = tru
                 className="w-full py-3 bg-gray-50 dark:bg-gray-850 hover:bg-gray-100 dark:hover:bg-gray-750 text-gray-650 dark:text-gray-300 font-bold rounded-xl text-xs transition-all tracking-tight active:scale-95 flex items-center justify-center space-x-1 border border-gray-100 dark:border-gray-700"
               >
                 <HelpCircle size={14} className="text-orange-500 flex-shrink-0" />
-                <span>Centre d'aide 📖</span>
+                <span>Centre d'aide </span>
               </button>
             </div>
           </div>

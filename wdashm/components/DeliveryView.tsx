@@ -1456,7 +1456,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
             <p className="text-sm text-gray-500 mt-2">Attendez qu'un restaurant vous assigne une commande.</p>
           </div>
         ) : (
-          <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-5">
             {orders.filter(o => o.status !== 'completed' && o.status !== 'cancelled').map((order) => {
               const distance = getDistanceInKm(
                 order.restaurant?.latitude,
@@ -2023,7 +2023,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
         </p>
       </div>
 
-      <div className="grid grid-cols-1 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {restaurants.length === 0 ? (
           <div className="text-center py-16 px-4 bg-white rounded-3xl border border-gray-100 shadow-xs">
             <div className="w-16 h-16 bg-gray-50 text-gray-400 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -2479,8 +2479,8 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
   return (
     <div className="min-h-screen bg-gray-50 pb-28">
       {/* Header */}
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-50 px-4 py-4">
-        <div className="max-w-md mx-auto flex items-center justify-between">
+      <header className="bg-white border-b border-gray-200 sticky top-0 z-50 px-4 sm:px-6 lg:px-8 py-3.5 shadow-2xs">
+        <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center space-x-3">
             <div className="w-10 h-10 bg-brand-500 rounded-xl flex items-center justify-center text-white shadow-lg shadow-brand-200 border-2 border-white/50 overflow-hidden">
               <img src={APP_LOGO_URL} alt="DashMeals Logo" className="w-full h-full object-cover" />
@@ -2497,6 +2497,55 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
               </div>
             </div>
           </div>
+
+          {/* Desktop Navigation Tabs for PC Web View */}
+          <div className="hidden lg:flex items-center space-x-1 bg-gray-100 p-1.5 rounded-2xl border border-gray-200/60">
+            <button
+              onClick={() => setActiveTab('orders')}
+              className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-black transition-all ${
+                activeTab === 'orders'
+                  ? 'bg-white text-brand-600 shadow-xs'
+                  : 'text-gray-500 hover:text-gray-900 hover:bg-gray-200/50'
+              }`}
+            >
+              <Package size={16} />
+              <span>Missions ({orders.filter(o => o.status !== 'completed' && o.status !== 'cancelled').length})</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('wallet')}
+              className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-black transition-all ${
+                activeTab === 'wallet'
+                  ? 'bg-white text-brand-600 shadow-xs'
+                  : 'text-gray-500 hover:text-gray-900 hover:bg-gray-200/50'
+              }`}
+            >
+              <Wallet size={16} />
+              <span>Mes Gains</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('restaurants')}
+              className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-black transition-all ${
+                activeTab === 'restaurants'
+                  ? 'bg-white text-brand-600 shadow-xs'
+                  : 'text-gray-500 hover:text-gray-900 hover:bg-gray-200/50'
+              }`}
+            >
+              <Store size={16} />
+              <span>Marché Partenaires</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('profile')}
+              className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-black transition-all ${
+                activeTab === 'profile'
+                  ? 'bg-white text-brand-600 shadow-xs'
+                  : 'text-gray-500 hover:text-gray-900 hover:bg-gray-200/50'
+              }`}
+            >
+              <UserIcon size={16} />
+              <span>Mon Profil</span>
+            </button>
+          </div>
+
           <div className="flex items-center space-x-2">
             <button 
               onClick={() => setIsHelpCenterOpen(true)}
@@ -2513,7 +2562,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
         </div>
       </header>
 
-      <main className="max-w-md mx-auto p-4">
+      <main className="max-w-md md:max-w-3xl lg:max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
         <AnimatePresence mode="wait">
           <motion.div
             key={activeTab}
@@ -2532,8 +2581,8 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
 
 
 
-      {/* Bottom Navigation */}
-      <nav className={`fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 px-6 py-3 z-50 transition-all duration-300 ${isNavVisible ? 'translate-y-0 opacity-100' : 'translate-y-[110%] opacity-0 pointer-events-none'}`}>
+      {/* Bottom Navigation for Mobile */}
+      <nav className={`lg:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 px-6 py-3 z-50 transition-all duration-300 ${isNavVisible ? 'translate-y-0 opacity-100' : 'translate-y-[110%] opacity-0 pointer-events-none'}`}>
         <div className="max-w-md mx-auto flex justify-between items-center">
           <button 
             onClick={() => setActiveTab('orders')}
