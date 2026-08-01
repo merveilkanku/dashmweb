@@ -476,7 +476,7 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
         notes: tx.notes
       });
 
-      toast.success(`Facture officielle N° ${invNum} envoyée avec succès à ${emailToSend} !`, { icon: '📧' });
+      toast.success(`Facture officielle N° ${invNum} envoyée avec succès à ${emailToSend} !`);
     } catch (err: any) {
       console.error('Invoice email error:', err);
       toast.error("Erreur lors de l'envoi de la facture: " + (err.message || "Échec d'envoi"));
@@ -1773,7 +1773,7 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
               html: `
                 <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e5e7eb; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
                   <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); padding: 30px; text-align: center; color: white;">
-                    <h1 style="margin: 0; font-size: 24px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px;">Abonnement Mis à Jour ⚡</h1>
+                    <h1 style="margin: 0; font-size: 24px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px;">Abonnement Mis à Jour</h1>
                     <p style="margin: 10px 0 0 0; font-size: 14px; opacity: 0.9;">Votre restaurant ${subscriptionModal.restaurant.name} a été mis à jour par l'administration.</p>
                   </div>
                   <div style="padding: 30px; color: #1f2937; line-height: 1.6;">
@@ -1793,7 +1793,7 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
                         </tr>
                         <tr>
                           <td style="padding: 6px 0; color: #4b5563; font-weight: 500;">Statut :</td>
-                          <td style="padding: 6px 0; text-align: right; font-weight: bold; color: #10b981;">Actif ✅</td>
+                          <td style="padding: 6px 0; text-align: right; font-weight: bold; color: #10b981;">Actif</td>
                         </tr>
                         <tr>
                           <td style="padding: 6px 0; color: #4b5563; font-weight: 500;">Date d'expiration :</td>
@@ -3147,7 +3147,7 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
                             ? 'bg-rose-100 dark:bg-rose-950/40 text-rose-700 dark:text-rose-400 border border-rose-200 dark:border-rose-800/40'
                             : 'bg-blue-100 dark:bg-blue-950/40 text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-800/40'
                         }`}>
-                          {tx.type === 'refund' ? '💸 Remboursement Prorata' : '💳 Abonnement DashMeals Pay'}
+                          {tx.type === 'refund' ? 'Remboursement Prorata' : 'Abonnement DashMeals Pay'}
                         </span>
                         <span className="text-[10px] text-gray-400 font-medium">{tx.paymentChannel}</span>
                       </div>
@@ -3201,7 +3201,7 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
                           title="Envoyer la facture par email"
                         >
                           <Mail size={13} />
-                          <span>Facture 📧</span>
+                          <span>Facture</span>
                         </button>
                       </div>
                     </td>
@@ -3304,7 +3304,7 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
                       className="px-3 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md transition-all cursor-pointer whitespace-nowrap"
                     >
                       {isSendingInvoice ? <RefreshCw size={14} className="animate-spin" /> : <Mail size={14} />}
-                      <span>Envoyer 📧</span>
+                      <span>Envoyer</span>
                     </button>
                   </div>
                 </div>
@@ -3683,7 +3683,7 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
                               className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 dark:bg-indigo-900/20 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800/40 text-[10px] font-extrabold uppercase tracking-wider rounded-xl transition-all inline-flex items-center gap-1 cursor-pointer"
                               title="Envoyer la facture d'abonnement par email"
                             >
-                              <Mail size={12} /> Facture 📧
+                              <Mail size={12} /> Facture
                             </button>
                           )}
                           {isPrincipalAdmin && (
@@ -4058,12 +4058,12 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
                                   className="text-[10px] text-brand-600 dark:text-brand-400 font-bold hover:underline"
                                   title="Copier les identifiants de connexion"
                                 >
-                                  Copier 📋
+                                  Copier
                                 </button>
                               </div>
                               {sa.phone_number && (
                                 <p className="text-[10px] text-slate-400 font-medium mt-0.5">
-                                  📞 {sa.phone_number}
+                                  {sa.phone_number}
                                 </p>
                               )}
                             </div>
@@ -4101,7 +4101,7 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
                                 : 'bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-400 border border-slate-300'
                             }`}
                           >
-                            {sa.is_active ? '✅ Actif' : '⏸️ Suspendu'}
+                            {sa.is_active ? 'Actif' : 'Suspendu'}
                           </button>
                         </td>
 
@@ -5063,7 +5063,7 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
                                                   await supabase.from('notifications').insert({
                                                       user_id: ownerUserId,
                                                       restaurant_id: r.id,
-                                                      title: "Remboursement DashMeals Pay Effectué 💸",
+                                                      title: "Remboursement DashMeals Pay Effectué",
                                                       message: `Votre remboursement DashMeals Pay d'un montant net de $${netRefundAmount.toFixed(2)} USD pour l'établissement "${r.name}" a été traité avec succès (Réf: ${kpayTxRef}).${refundModal.reason ? ` Motif : ${refundModal.reason}` : ''}`,
                                                       type: 'refund',
                                                       data: {
@@ -5121,8 +5121,7 @@ export const SuperAdminDashboard: React.FC<Props> = ({ user, onLogout, theme, se
                                           setKpayTransactions(prev => [refundTxRecord, ...prev]);
 
                                           toast.success(
-                                              `Remboursement DashMeals Pay de ${netRefundAmount.toFixed(2)} USD effectué et notification envoyée (${kpayTxRef}).`, 
-                                              { icon: '💸' }
+                                              `Remboursement DashMeals Pay de ${netRefundAmount.toFixed(2)} USD effectué et notification envoyée (${kpayTxRef}).`
                                           );
 
                                           onRefreshData?.();

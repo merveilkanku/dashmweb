@@ -74,9 +74,9 @@ const getTravelTimeInMinutes = (distance: number, vehicleType: string) => {
 };
 
 const PROOF_PHOTO_PRESETS = [
-  { id: 'delivered_to_door', label: 'Déposé devant la porte 🚪', url: 'https://images.unsplash.com/photo-1531346878377-a5be20888e57?auto=format&fit=crop&w=300&h=200&q=80' },
-  { id: 'handed_to_customer', label: 'Remis en main propre 🤝', url: 'https://images.unsplash.com/photo-1522071820081-009f0129c71c?auto=format&fit=crop&w=300&h=200&q=80' },
-  { id: 'placed_on_reception', label: 'Déposé à la réception 🏢', url: 'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?auto=format&fit=crop&w=300&h=200&q=80' },
+  { id: 'delivered_to_door', label: 'Déposé devant la porte', url: 'https://images.unsplash.com/photo-1531346878377-a5be20888e57?auto=format&fit=crop&w=300&h=200&q=80' },
+  { id: 'handed_to_customer', label: 'Remis en main propre', url: 'https://images.unsplash.com/photo-1522071820081-009f0129c71c?auto=format&fit=crop&w=300&h=200&q=80' },
+  { id: 'placed_on_reception', label: 'Déposé à la réception', url: 'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?auto=format&fit=crop&w=300&h=200&q=80' },
 ];
 
 interface Props {
@@ -163,7 +163,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
     } catch (e) {
       console.warn("localStorage write blocked:", e);
     }
-    toast.success(nextVal ? "Alertes sonores activées 🔊" : "Alertes sonores coupées 🔇");
+    toast.success(nextVal ? "Alertes sonores activées" : "Alertes sonores coupées");
   };
 
   useEffect(() => {
@@ -296,7 +296,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
   // Synchronisation avec les actions de clic de notification push
   useEffect(() => {
     const handleNavigate = () => {
-      console.log("🚀 [DeliveryView] Changement de vue vers les commandes via notification push");
+      console.log("[DeliveryView] Changement de vue vers les commandes via notification push");
       setActiveTab('orders');
     };
     window.addEventListener('navigate_to_order', handleNavigate);
@@ -429,7 +429,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
             items: [
               {
                 id: 'm-1',
-                name: 'Poulet Mayo Grand Format 🇨🇩',
+                name: 'Poulet Mayo Grand Format',
                 description: 'Le célèbre poulet mayo de Kinshasa avec frites et bananes plantains',
                 price: 15.0,
                 category: 'plat',
@@ -464,7 +464,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
             delivery_acceptance_status: 'accepted',
             created_at: new Date(Date.now() - 3600000).toISOString(),
             restaurant: {
-              name: 'Escale Gourmande 🍢',
+              name: 'Escale Gourmande',
               phone_number: '+243811112222',
               latitude: -4.341,
               longitude: 15.312,
@@ -489,7 +489,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
                 category: 'plat',
                 quantity: 1,
                 restaurantId: 'resto-102',
-                restaurantName: 'Escale Gourmande 🍢'
+                restaurantName: 'Escale Gourmande'
               },
               {
                 id: 'm-4',
@@ -499,7 +499,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
                 category: 'plat',
                 quantity: 1,
                 restaurantId: 'resto-102',
-                restaurantName: 'Escale Gourmande 🍢'
+                restaurantName: 'Escale Gourmande'
               }
             ]
           }
@@ -629,7 +629,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
             createdAt: o.created_at,
             deliveryLocation: o.delivery_location || (parsedItems && parsedItems.length > 0 ? parsedItems[0].deliveryLocation : undefined),
             restaurant: {
-              name: o.restaurant?.name || 'Course Privée 📦',
+              name: o.restaurant?.name || 'Course Privée',
               phone_number: o.restaurant?.phone_number || '',
               latitude: o.restaurant?.latitude,
               longitude: o.restaurant?.longitude,
@@ -739,7 +739,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
               setSimulatingOrderId(null);
               setSimulationProgress(0);
               
-              toast.success("Simulation GPS terminée ! Vous êtes arrivé à destination.", { icon: '📍' });
+              toast.success("Simulation GPS terminée ! Vous êtes arrivé à destination.");
               
               // Trigger final update of coordinates
               updateGPSCoordsLocalOrDB(simulatingOrderId, endLat, endLng);
@@ -812,7 +812,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
       }
     }
 
-    toast.success("Preuve de livraison enregistrée avec succès ! Le client a été averti.", { icon: '📸' });
+    toast.success("Preuve de livraison enregistrée avec succès ! Le client a été averti.");
     setShowProofModal(false);
     setProofOrderId(null);
   };
@@ -912,7 +912,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
       toast.success(`Statut mis à jour: ${newStatus}`);
       fetchAssignedOrders();
     } catch (error: any) {
-      console.warn("⚠️ [Delivery] Fallback de secours local activé pour l'état:", error?.message || error);
+      console.warn("[Delivery] Fallback de secours local activé pour l'état:", error?.message || error);
       toast.success(`Statut mis à jour (Démo): ${newStatus}`);
       
       // Trigger email notification for local demo mode if private courier
@@ -1062,7 +1062,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
             await supabase.from('notifications').insert({
               restaurant_id: orderData.restaurant_id,
               user_id: memoResto?.owner_id || null,
-              title: "Livreur Assigné ! 🛵",
+              title: "Livreur Assigné !",
               message: `Le livreur ${user.name} a accepté la commande. Estimations : au resto vers ${estRestoText}, chez le client vers ${estClientText}.`,
               type: 'delivery_acceptance',
               data: { 
@@ -1077,7 +1077,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
           if (orderData.user_id) {
             await supabase.from('notifications').insert({
               user_id: orderData.user_id,
-              title: "Livreur en route ! 🛵💨",
+              title: "Livreur en route !",
               message: `Bonne nouvelle ! Le livreur ${user.name} a accepté votre commande. Arrivée estimée au resto : ${estRestoText}. Livraison estimée chez vous : ${estClientText}.`,
               type: 'delivery_acceptance',
               data: { 
@@ -1094,7 +1094,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
       setAcceptingOrder(null);
       fetchAssignedOrders();
     } catch (error: any) {
-      console.warn("⚠️ [Delivery] Fallback local d'acceptation activé:", error?.message || error);
+      console.warn("[Delivery] Fallback local d'acceptation activé:", error?.message || error);
       toast.success("Mission acceptée ! (Démo locale)");
       
       // Update local state memory immediately so UI reacts instantly
@@ -1193,7 +1193,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
       try {
         await supabase.from('notifications').insert({
           user_id: targetCourier.userId || null,
-          title: "Livreur trouvé pour votre Course Privée ! 📦🛵",
+          title: "Livreur trouvé pour votre Course Privée !",
           message: `Le livreur ${user.name} a accepté votre course privée et est en route pour le retrait.`,
           type: 'delivery_acceptance',
           data: { order_id: orderId, result: 'accepted' }
@@ -1244,7 +1244,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
 
       fetchAssignedOrders();
     } catch (error) {
-      console.warn("⚠️ Refus local opéré:", error);
+      console.warn("Refus local opéré:", error);
       toast.info("Mission refusée (Démo locale)");
 
       // Remove from memory state immediately
@@ -1320,7 +1320,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
                 <div key={order.id} className="bg-white border border-rose-100 rounded-xl p-3 flex items-center justify-between shadow-xxs">
                   <div className="min-w-0 flex-1 text-left">
                     <span className="font-bold text-xs text-gray-900 block truncate font-sans">Proposition #{order.id.slice(0, 6)}</span>
-                    <span className="text-[10px] text-rose-600 font-bold block mt-1 uppercase font-sans">⏱️ En attente depuis {diffMins} min !</span>
+                    <span className="text-[10px] text-rose-600 font-bold block mt-1 uppercase font-sans">En attente depuis {diffMins} min !</span>
                   </div>
                   <button
                     onClick={() => {
@@ -1339,7 +1339,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
                 <div key={order.id} className="bg-white border border-amber-200 rounded-xl p-3 flex items-center justify-between shadow-xxs">
                   <div className="min-w-0 flex-1 text-left">
                     <span className="font-bold text-xs text-gray-900 block truncate font-sans">Commande #{order.id.slice(0, 6)}</span>
-                    <span className="text-[10px] text-amber-600 font-bold block mt-1 uppercase font-sans">🛵 Non livrée depuis {diffMins} min</span>
+                    <span className="text-[10px] text-amber-600 font-bold block mt-1 uppercase font-sans">Non livrée depuis {diffMins} min</span>
                   </div>
                   <span className="text-[10px] bg-amber-50 text-amber-700 px-2 py-1 rounded font-bold uppercase shrink-0 font-sans">
                     {order.status}
@@ -1356,7 +1356,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
         <div className="bg-orange-50 border border-orange-200 rounded-2xl p-4 flex flex-col space-y-3 shadow-xs">
           <div className="flex items-center space-x-1.5 text-orange-700">
             <Package className="animate-pulse shrink-0 text-orange-500" size={18} />
-            <span className="font-extrabold text-xs uppercase tracking-wider">📦 Courses Privées Disponibles</span>
+            <span className="font-extrabold text-xs uppercase tracking-wider">Courses Privées Disponibles</span>
           </div>
           <div className="flex flex-col space-y-3">
             {availableCouriers.map(courier => (
@@ -1411,7 +1411,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
               Tableau de Bord : Courses Privées (Livreur)
             </h3>
             <span className="text-[9px] bg-white/20 px-2.5 py-1 rounded-full font-black uppercase">
-              Mes Stats 📊
+              Mes Stats
             </span>
           </div>
 
@@ -1538,9 +1538,9 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
                         {/* Current action step description */}
                         <p className="text-xs text-slate-300 italic">
                           {isCurrentSimulating ? (
-                            simulationProgress < 30 ? "🚲 Départ du restaurant, en route..." :
-                            simulationProgress < 70 ? "🚦 Passage par le Boulevard principal..." :
-                            "🏡 Approche de la zone de livraison !"
+                            simulationProgress < 30 ? "Départ du restaurant, en route..." :
+                            simulationProgress < 70 ? "Passage par le Boulevard principal..." :
+                            "Approche de la zone de livraison !"
                           ) : "Prêt à simuler l'itinéraire GPS en direct sur la carte client."}
                         </p>
 
@@ -1561,7 +1561,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
                               : 'bg-brand-600 hover:bg-brand-700 text-white'
                           }`}
                         >
-                          {isCurrentSimulating ? "Arrêter la simulation" : "Démarrer la simulation GPS 📍"}
+                          {isCurrentSimulating ? "Arrêter la simulation" : "Démarrer la simulation GPS"}
                         </button>
                       </div>
                     )}
@@ -1574,7 +1574,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
                             <MapPin size={16} />
                           </div>
                           <div className="flex-1">
-                            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Point de Retrait 📦</p>
+                            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Point de Retrait</p>
                             <p className="text-sm font-black text-gray-900">{order.items[0]?.pickupAddress || 'Retrait non spécifié'}</p>
                           </div>
                         </div>
@@ -1587,7 +1587,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
                             <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Destinataire & Point de Livraison</p>
                             <p className="text-sm font-black text-gray-950">{order.items[0]?.recipientName || 'Destinataire'}</p>
                             {order.items[0]?.recipientPhone && (
-                              <p className="text-xs text-gray-500 font-bold mt-0.5">📞 {order.items[0]?.recipientPhone}</p>
+                              <p className="text-xs text-gray-500 font-bold mt-0.5 flex items-center gap-1"><Phone size={12} /> {order.items[0]?.recipientPhone}</p>
                             )}
                             <div className="mt-2 p-3 bg-amber-50 border border-amber-200 rounded-xl">
                               <div className="flex items-center space-x-1 mb-1 text-amber-800">
@@ -1648,7 +1648,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
                                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Client</p>
                                 <p className="text-sm font-black text-gray-950">{order.customer?.full_name || 'Client Inconnu'}</p>
                                 {order.customer?.phone_number && (
-                                  <p className="text-xs text-gray-500 font-bold mt-0.5">📞 {order.customer.phone_number}</p>
+                                  <p className="text-xs text-gray-500 font-bold mt-0.5 flex items-center gap-1"><Phone size={12} /> {order.customer.phone_number}</p>
                                 )}
                                 
                                 {/* ADRESSE EN EVIDENCE MAXIMUM POUR LE LIVREUR */}
@@ -1743,7 +1743,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
                                   className="w-full bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white py-3 rounded-xl font-black text-xs uppercase tracking-wider shadow-md flex items-center justify-center space-x-2 transition-all relative z-20 cursor-pointer"
                                 >
                                   <Package size={16} className="animate-bounce" />
-                                  <span>Colis Récupéré • Commencer la Course 🛵</span>
+                                  <span>Colis Récupéré • Commencer la Course</span>
                                 </button>
                               ) : (
                                 <>
@@ -1753,7 +1753,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
                                       className="w-full bg-amber-500 hover:bg-amber-600 text-white py-3 rounded-xl font-black text-xs uppercase tracking-wider shadow-md flex items-center justify-center space-x-2 transition-all relative z-20 cursor-pointer"
                                     >
                                       <Check size={16} />
-                                      <span>Marquer comme Prête 🛍️</span>
+                                      <span>Marquer comme Prête</span>
                                     </button>
                                   )}
                                   <button
@@ -1761,7 +1761,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
                                     className="w-full bg-brand-600 hover:bg-brand-700 text-white py-3 rounded-xl font-black text-xs uppercase tracking-wider shadow-lg shadow-brand-200 flex items-center justify-center space-x-2 transition-all relative z-20 cursor-pointer"
                                   >
                                     <Bike size={16} />
-                                    <span>Commencer la livraison 🛵</span>
+                                    <span>Commencer la livraison</span>
                                   </button>
                                 </>
                               )}
@@ -1775,7 +1775,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
                                 className="col-span-2 bg-green-600 hover:bg-green-700 text-white py-3 rounded-xl font-black text-xs uppercase tracking-wider shadow-lg shadow-green-200 flex items-center justify-center space-x-2 mb-2 transition-all relative z-20 cursor-pointer"
                               >
                                 <CheckCircle2 size={16} />
-                                <span>Marquer comme livré (Preuve photo) ✅</span>
+                                <span>Marquer comme livré (Preuve photo)</span>
                               </button>
                               <div className="col-span-2 grid grid-cols-2 gap-2">
                                   <a
@@ -2065,7 +2065,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
                         ? 'bg-emerald-50 text-emerald-700 border border-emerald-150' 
                         : 'bg-gray-50 text-gray-500 border border-gray-150'
                     }`}>
-                      {resto.is_open ? 'Ouvert 🟢' : 'Fermé 🔴'}
+                      {resto.is_open ? 'Ouvert' : 'Fermé'}
                     </span>
                   </div>
                   <div className="flex items-center text-xs text-gray-500 space-x-2 mt-1">
@@ -2447,7 +2447,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
             >
               <span className="flex items-center gap-2">
                 <HelpCircle size={16} />
-                Ouvrir le Centre d'Aide 📖
+                Ouvrir le Centre d'Aide
               </span>
               <ChevronRight size={16} />
             </button>
@@ -2638,7 +2638,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
               {/* Est 1: Temps pour aller au Resto */}
               <div className="space-y-2">
                 <label className="text-[11px] font-black uppercase text-gray-500 dark:text-gray-400 flex items-center justify-between">
-                  <span>🚗 Arriving at Restaurant</span>
+                  <span>Arriving at Restaurant</span>
                   <span className="text-brand-600 font-bold font-mono bg-brand-50 dark:bg-brand-900/30 px-2.5 py-0.5 rounded text-xs">
                     {estRestoMins} min
                   </span>
@@ -2672,7 +2672,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
               {/* Est 2: Temps de livraison du resto chez le client */}
               <div className="space-y-2">
                 <label className="text-[11px] font-black uppercase text-gray-500 dark:text-gray-400 flex items-center justify-between">
-                  <span>🏠 Delivery to Customer</span>
+                  <span>Delivery to Customer</span>
                   <span className="text-orange-600 font-bold font-mono bg-orange-50 dark:bg-orange-950/30 px-2.5 py-0.5 rounded text-xs">
                     {estClientMins} min
                   </span>
@@ -2893,7 +2893,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
 
               {!selectedContactResto.phone_number && (
                 <div className="p-4 bg-amber-50 dark:bg-amber-950/20 text-amber-700 dark:text-amber-300 text-xs rounded-2xl border border-amber-100 dark:border-amber-900/30 text-left">
-                  ⚠️ Cet établissement n'a pas configuré de numéro de téléphone. Vous pouvez utiliser le <strong>Chat en direct</strong> sécurisé ci-dessus pour le contacter instantanément.
+                  Cet établissement n'a pas configuré de numéro de téléphone. Vous pouvez utiliser le <strong>Chat en direct</strong> sécurisé ci-dessus pour le contacter instantanément.
                 </div>
               )}
             </div>
@@ -2982,7 +2982,7 @@ export const DeliveryView: React.FC<Props> = ({ user, onLogout, onUpdateUser }) 
                 onClick={handleConfirmProofAndDeliver}
                 className="py-3 rounded-2xl bg-green-600 hover:bg-green-700 text-white text-xs font-black shadow-md shadow-green-100 transition-all flex items-center justify-center space-x-1 cursor-pointer"
               >
-                <span>Confirmer la livraison 📸</span>
+                <span>Confirmer la livraison</span>
               </button>
             </div>
           </motion.div>

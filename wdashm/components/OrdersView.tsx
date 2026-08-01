@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { Order, OrderStatus, Restaurant } from '../types';
 import { formatDualPrice } from '../utils/format';
 import { supabase } from '../lib/supabase';
+import { safeUploadPaymentProof } from '../utils/imageCompressor';
 import { DeliveryTrackingMap } from './DeliveryTrackingMap';
 import { LiveDeliveryMap } from './LiveDeliveryMap';
 import { isUserOnline, formatLastSeen } from '../utils/presence';
@@ -61,15 +62,9 @@ export const OrdersView: React.FC<Props> = ({ orders, onChat, onLivreurChat, onB
 
   const handleReuploadPaymentProof = async (orderId: string, file: File) => {
       try {
-          toast.loading("Envoi de la nouvelle preuve...", { id: 'upload-proof' });
+          toast.loading("Traitement et envoi de la preuve...", { id: 'upload-proof' });
           
-          const fileExt = file.name.split('.').pop();
-          const fileName = `proof_${orderId}_${Date.now()}.${fileExt}`;
-          const { error: uploadError } = await supabase.storage.from('images').upload(fileName, file);
-          
-          if (uploadError) throw uploadError;
-          
-          const { data: { publicUrl } } = supabase.storage.from('images').getPublicUrl(fileName);
+          const publicUrl = await safeUploadPaymentProof(file, `proof_${orderId}`);
           
           const order = orders.find(o => o.id === orderId);
           if (!order) throw new Error("Order not found");
@@ -84,7 +79,7 @@ export const OrdersView: React.FC<Props> = ({ orders, onChat, onLivreurChat, onB
               const localOrdersStr = localStorage.getItem('dashmeals_mock_orders');
               if (localOrdersStr) {
                   const localOrders = JSON.parse(localOrdersStr);
-                  const updatedOrders = localOrders.map((o: any) => o.id === orderId ? { ...o, items: newItems, proof_url: publicUrl } : o);
+                  const updatedOrders = localOrders.map((o: any) => o.id === orderId ? { ...o, items: newItems, proof_url: publicUrl, paymentStatus: 'pending' } : o);
                   localStorage.setItem('dashmeals_mock_orders', JSON.stringify(updatedOrders));
                   if (onOrderUpdated) onOrderUpdated();
               }
@@ -235,19 +230,9 @@ export const OrdersView: React.FC<Props> = ({ orders, onChat, onLivreurChat, onB
       try {
           let proofUrl = null;
 
-          // 1. Upload proof if exists
+          // 1. Upload proof if exists safely with compression
           if (proofFile) {
-              const fileExt = proofFile.name.split('.').pop();
-              const fileName = `proof_${confirmingOrder.id}_${Date.now()}.${fileExt}`;
-              const { error: uploadError } = await supabase.storage.from('images').upload(fileName, proofFile);
-              
-              if (uploadError) {
-                  console.error("Upload proof failed:", uploadError);
-                  // Continue anyway
-              } else {
-                  const { data: { publicUrl } } = supabase.storage.from('images').getPublicUrl(fileName);
-                  proofUrl = publicUrl;
-              }
+              proofUrl = await safeUploadPaymentProof(proofFile, `receipt_proof_${confirmingOrder.id}`);
           }
 
           // 2. Update Order Status
@@ -440,7 +425,7 @@ export const OrdersView: React.FC<Props> = ({ orders, onChat, onLivreurChat, onB
                                 <div>
                                     <div className="flex items-center space-x-2">
                                         <h3 className="font-bold text-gray-800 text-lg">
-                                             {isPrivateCourier ? 'Course Privée 📦' : (order.restaurant?.name || 'Restaurant inconnu')}
+                                             {isPrivateCourier ? 'Course Privée' : (order.restaurant?.name || 'Restaurant inconnu')}
                                          </h3>
                                         {order.isUrgent && (
                                             <span className="bg-red-500 text-white px-2 py-0.5 rounded text-[10px] font-bold uppercase flex items-center shadow-sm animate-pulse-fast">
@@ -474,14 +459,14 @@ export const OrdersView: React.FC<Props> = ({ orders, onChat, onLivreurChat, onB
                                     if (isPrivateCourier) {
                                         return (
                                             <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-orange-100 text-orange-850 flex items-center">
-                                                📦 Course Privée
+                                                Course Privée
                                             </span>
                                         );
                                     }
                                     const isTakeaway = order.delivery_fee === 0 || (order.items && order.items[0]?.fulfillmentMode === 'pickup') || order.delivery_location?.address?.includes('Récupération') || order.delivery_location?.address?.includes('emporter');
                                     return (
                                         <span className={`text-[10px] font-bold px-2 py-0.5 rounded flex items-center ${isTakeaway ? 'bg-amber-100 text-amber-800' : 'bg-blue-105 text-blue-800'}`}>
-                                            {isTakeaway ? '🥡 À emporter' : '🛵 Livraison'}
+                                            {isTakeaway ? 'À emporter' : 'Livraison'}
                                         </span>
                                     );
                                 })()}
@@ -505,7 +490,10 @@ export const OrdersView: React.FC<Props> = ({ orders, onChat, onLivreurChat, onB
                                             className="hidden" 
                                             onChange={(e) => {
                                                 const file = e.target.files?.[0];
-                                                if (file) handleReuploadPaymentProof(order.id, file);
+                                                if (file) {
+                                                    handleReuploadPaymentProof(order.id, file);
+                                                    e.target.value = '';
+                                                }
                                             }} 
                                         />
                                     </label>
@@ -571,7 +559,7 @@ export const OrdersView: React.FC<Props> = ({ orders, onChat, onLivreurChat, onB
                                                     )}
                                                 </h5>
                                                 <span className="inline-flex items-center text-[10px] text-brand-700 dark:text-brand-300 font-bold bg-brand-50 dark:bg-brand-950/40 rounded-full px-2 py-0.5 mt-1">
-                                                    🛵 {order.delivery_person.delivery_info?.vehicleType || 'Moto'}
+                                                    {order.delivery_person.delivery_info?.vehicleType || 'Moto'}
                                                 </span>
                                             </div>
                                         </div>
@@ -817,7 +805,7 @@ export const OrdersView: React.FC<Props> = ({ orders, onChat, onLivreurChat, onB
                                                 onClick={() => setFlippingOrderToTakeaway(order)}
                                                 className="w-full py-2.5 bg-amber-55/60 hover:bg-amber-100/80 text-amber-800 border border-amber-200 rounded-xl text-xs font-bold transition-all flex items-center justify-center space-x-2 shadow-sm"
                                             >
-                                                <span>🥡 Refuser livraison & aller chercher au restaurant (- frais)</span>
+                                                <span>Refuser livraison & aller chercher au restaurant (- frais)</span>
                                             </button>
                                         ) : null;
                                     })()}
@@ -937,7 +925,7 @@ export const OrdersView: React.FC<Props> = ({ orders, onChat, onLivreurChat, onB
                             Voulez-vous refuser le service de livraison et récupérer vous-même votre plat au restaurant <span className="font-extrabold text-gray-800">{flippingOrderToTakeaway.restaurant?.name || 'sélectionné'}</span> ?
                         </p>
                         <div className="bg-yellow-50 p-3 rounded-xl border border-yellow-250">
-                            <p className="text-xs text-yellow-805 font-bold mb-1">💡 Ce qui va changer :</p>
+                            <p className="text-xs text-yellow-805 font-bold mb-1">Ce qui va changer :</p>
                             <ul className="text-[11px] text-yellow-750 space-y-1 list-disc list-inside">
                                 <li><strong>Les frais de livraison</strong> de votre commande passeront à <strong>0 $</strong>.</li>
                                 <li>L'affectation du livreur sera annulée.</li>

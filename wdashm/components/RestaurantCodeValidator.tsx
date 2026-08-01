@@ -201,7 +201,7 @@ export const RestaurantCodeValidator: React.FC<Props> = ({ restaurant, onUpdateR
                     ? 'bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300'
                     : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-300 animate-pulse'
                 }`}>
-                  {foundOffer.status === 'redeemed' ? 'Déjà Utilisé' : '🟢 Code Valide & Actif'}
+                  {foundOffer.status === 'redeemed' ? 'Déjà Utilisé' : 'Code Valide & Actif'}
                 </span>
               </div>
             </div>

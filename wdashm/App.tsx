@@ -3,6 +3,7 @@ import { supabase } from './lib/supabase';
 import { MOCK_RESTAURANTS, KINSHASA_CENTER_LAT, KINSHASA_CENTER_LNG } from './constants';
 import { Restaurant, User, UserRole, MenuItem, BusinessType, Theme, Language, AppFont } from './types';
 import { AuthScreen } from './components/AuthScreen';
+import { LandingPage } from './components/LandingPage';
 import { CustomerView } from './components/CustomerView';
 import { BusinessDashboard } from './BusinessDashboard';
 import { SuperAdminDashboard } from './components/SuperAdminDashboard';
@@ -36,7 +37,8 @@ function App() {
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [adminClientMode, setAdminClientMode] = useState(false);
-  const [showAuth, setShowAuth] = useState(true);
+  const [showAuth, setShowAuth] = useState(false);
+  const [unauthView, setUnauthView] = useState<'landing' | 'auth' | 'guest'>('landing');
   const [authMode, setAuthMode] = useState<'login' | 'signup' | 'reset'>('login');
   
   // Détection initiale (réservée à la récupération de mot de passe avec type=recovery ou l'URL explicite)
@@ -147,10 +149,8 @@ function App() {
     // Capture immédiate du jeton dans l'URL (Deep Link ou Redirection localhost)
     const handleUrlAuth = async (urlStr: string) => {
       try {
-        if (!urlStr || (!urlStr.includes('access_token=') && !urlStr.includes('refresh_token='))) return;
+        if (!urlStr) return;
 
-        console.log("🔍 [Auth] Analyse URL pour jeton...");
-        
         // Extraction manuelle robuste (le hash n'est pas toujours géré par URLSearchParams nativement après un redirect)
         const getParam = (name: string) => {
           const regex = new RegExp('[#?&]' + name + '=([^&#]*)');
@@ -158,49 +158,74 @@ function App() {
           return results ? decodeURIComponent(results[1]) : null;
         };
 
+        const errorDesc = getParam('error_description') || getParam('error');
+        if (errorDesc) {
+          const formattedError = decodeURIComponent(errorDesc.replace(/\+/g, ' '));
+          console.error("❌ [Auth] Erreur OAuth reçue dans l'URL:", formattedError);
+          toast.error(`Erreur de connexion Google: ${formattedError}`);
+          if (window.opener && window.opener !== window) {
+            window.opener.postMessage({
+              type: 'OAUTH_ERROR',
+              error: formattedError
+            }, '*');
+            setTimeout(() => { window.close(); }, 1500);
+            return;
+          }
+        }
+
+        if (!urlStr.includes('access_token=') && !urlStr.includes('refresh_token=')) return;
+
+        console.log("🔍 [Auth] Analyse URL pour jeton...");
         const accessToken = getParam('access_token');
         const refreshToken = getParam('refresh_token');
 
         if (accessToken) {
-          // --- EVITER LE PROBLÈME DE REBOOT INTENT SUR APK ---
-          // Si on a déjà traité ce jeton avec succès, on l'ignore pour éviter qu'Android n'écrive par-dessus la session
-          const lastToken = localStorage.getItem('dashmeals_last_auth_token');
-          if (lastToken === accessToken) {
-            console.log("⏭️ [Auth] Jeton d'accès déjà traité lors d'une session précédente. Ignoré de façon préventive.");
-            return;
+          // Vérifier si Supabase possède déjà une session active pour ce token
+          const { data: currentSessionRes } = await supabase.auth.getSession();
+          let sessionToUse = currentSessionRes?.session;
+          
+          if (!sessionToUse || sessionToUse.access_token !== accessToken) {
+            console.log("🔑 [Auth] Jeton trouvé. Synchronisation Supabase...");
+            const { data, error } = await supabase.auth.setSession({
+              access_token: accessToken,
+              refresh_token: refreshToken || '',
+            });
+            
+            if (error) {
+              console.error('❌ [Auth] Erreur setSession:', error.message);
+              if (error.message.includes('expired')) {
+                toast.error("Le lien a expiré. Veuillez recommencer.");
+              }
+            } else {
+              sessionToUse = data.session;
+            }
           }
 
-          console.log("🔑 [Auth] Jeton trouvé. Synchronisation Supabase...");
-          const { data, error } = await supabase.auth.setSession({
-            access_token: accessToken,
-            refresh_token: refreshToken || '',
-          });
-          
-          if (error) {
-            console.error('❌ [Auth] Erreur setSession:', error.message);
-            if (error.message.includes('expired')) {
-              toast.error("Le lien a expiré. Veuillez recommencer.");
-            }
-          } else if (data.session) {
+          if (sessionToUse) {
             console.log('✅ [Auth] Session activée via URL');
-            // Enregistrer le token traité avec succès pour éviter que le reboot ne le traite de nouveau
-            localStorage.setItem('dashmeals_last_auth_token', accessToken);
-            toast.success("Connexion réussie !");
+            // Enregistrer le token traité avec succès
+            localStorage.setItem('dashmeals_last_auth_token', sessionToUse.access_token);
             
-            // Si on est dans une popup d'authentification (Google OAuth), on informe la fenêtre parente
+            // Si on est dans une popup d'authentification (Google OAuth), on informe la fenêtre parente et on se ferme
             if (window.opener && window.opener !== window) {
-              console.log("📤 [Auth] Envoi du signal de succès à la fenêtre parente...");
-              window.opener.postMessage({ 
-                type: 'OAUTH_SUCCESS', 
-                session: data.session 
-              }, window.location.origin);
+              console.log("📤 [Auth Popup] Envoi du signal de succès à la fenêtre parente...");
+              try {
+                window.opener.postMessage({ 
+                  type: 'OAUTH_SUCCESS', 
+                  session: sessionToUse 
+                }, '*');
+              } catch (postErr) {
+                console.error("❌ Erreur postMessage vers opener:", postErr);
+              }
               
-              // Un court délai avant de fermer pour s'assurer que le message est envoyé
+              // Un court délai avant de fermer la popup
               setTimeout(() => {
                 window.close();
-              }, 1000);
+              }, 600);
               return;
             }
+
+            toast.success("Connexion réussie !");
             
             // Nettoyage impératif pour éviter les boucles au refresh (sécurisé sous try-catch pour Android WebView)
             try {
@@ -382,6 +407,7 @@ function App() {
       try {
         if (isRecoveryMode) {
           setAuthMode('reset');
+          setUnauthView('auth');
           setShowAuth(true);
           clearTimeout(safetyTimer);
           setLoading(false);
@@ -502,8 +528,9 @@ function App() {
               setShowAuth(false);
             }
           } else {
-            console.log("👤 [Auth] Pas de session active.");
-            setShowAuth(true);
+            console.log("👤 [Auth] Pas de session active. Affichage de la page d'accueil.");
+            setShowAuth(false);
+            setUnauthView('landing');
             setIsAppInitializing(false);
             setLoading(false);
           }
@@ -1474,12 +1501,13 @@ function App() {
       console.warn("Error clearing localStorage keys during logout:", e);
     }
 
-    // 3. Immediately reset UI/State to show login screen
+    // 3. Immediately reset UI/State to show landing page
     setCurrentUser(null);
     currentUserRef.current = null;
     setIsAppLocked(false);
     setAuthMode('login');
-    setShowAuth(true); // Always show auth screen after logout
+    setUnauthView('landing');
+    setShowAuth(false);
 
     // 4. Fire standard remote signOut in background so it doesn't block the UI
     try {
@@ -1573,9 +1601,34 @@ function App() {
       );
     }
 
-    // 2. Not Logged In -> Show Auth or Guest View
+    // 2. Not Logged In -> Show LandingPage, AuthScreen or Guest Customer View
     if (!currentUser) {
-      if (showAuth) {
+      if (unauthView === 'landing' && !showAuth) {
+        return (
+          <>
+            <OfflineBanner isSupabaseReachable={isSupabaseReachable} />
+            <LandingPage 
+              restaurants={restaurants}
+              onExploreAsGuest={() => {
+                setUnauthView('guest');
+                setShowAuth(false);
+              }}
+              onOpenLogin={() => {
+                setAuthMode('login');
+                setUnauthView('auth');
+                setShowAuth(true);
+              }}
+              onOpenRegister={(initialRole) => {
+                setAuthMode('signup');
+                setUnauthView('auth');
+                setShowAuth(true);
+              }}
+            />
+          </>
+        );
+      }
+
+      if (showAuth || unauthView === 'auth') {
         return (
           <>
             {!isSupabaseReachable && (
@@ -1590,6 +1643,7 @@ function App() {
               language={language}
               onBackToGuest={() => {
                 setShowAuth(false);
+                setUnauthView('landing');
                 setAuthMode('login');
               }} 
               initialMode={authMode}
@@ -1610,10 +1664,37 @@ function App() {
       return (
         <>
           <OfflineBanner isSupabaseReachable={isSupabaseReachable} />
+          <div className="bg-orange-600 text-white text-xs px-4 py-2 flex items-center justify-between sticky top-0 z-40 shadow-sm">
+            <span className="font-bold">Vous explorez DashMeals en mode invité.</span>
+            <div className="flex items-center space-x-2">
+              <button 
+                onClick={() => {
+                  setUnauthView('landing');
+                  setShowAuth(false);
+                }}
+                className="underline hover:text-orange-100 font-semibold cursor-pointer text-xs mr-2"
+              >
+                Page d'accueil
+              </button>
+              <button 
+                onClick={() => {
+                  setAuthMode('login');
+                  setUnauthView('auth');
+                  setShowAuth(true);
+                }}
+                className="bg-white text-orange-600 font-extrabold px-3 py-1 rounded-lg hover:bg-orange-50 text-xs shadow cursor-pointer"
+              >
+                Se connecter / S'inscrire
+              </button>
+            </div>
+          </div>
           <CustomerView 
             user={guestUser}
             allRestaurants={restaurants}
-            onLogout={() => setShowAuth(true)} // onLogout for guest means "Login"
+            onLogout={() => {
+              setUnauthView('auth');
+              setShowAuth(true);
+            }} // onLogout for guest means "Login"
             theme={theme}
             setTheme={setTheme}
             language={language}

@@ -3,7 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>DashMeals RDC</title>
+    <title>DASHMEALS - Application de Livraison de Repas & Gestion de Restaurants</title>
+    <meta name="description" content="DASHMEALS est l'application officielle de commande, livraison de repas en ligne et gestion de restaurants en RDC (Kinshasa, Lubumbashi, Goma)." />
+    <meta name="application-name" content="DASHMEALS" />
+    <meta name="google-site-verification" content="89d4716ae4439c3c" />
     
     <script>
       // Diagnostic global des erreurs du moteur Webview/JS (extrêmement utile pour APK)
@@ -194,7 +197,58 @@
     <link rel="stylesheet" href="./index.css">
 </head>
   <body class="bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white transition-colors duration-300">
-    <div id="root"></div>
+    <div id="root">
+      <!-- Fallback statique pour crawlers, bots de vérification Google OAuth & lecteurs sans JS -->
+      <main style="font-family: system-ui, -apple-system, sans-serif; max-width: 720px; margin: 40px auto; padding: 36px 28px; background: #ffffff; border-radius: 24px; box-shadow: 0 12px 36px rgba(0,0,0,0.08); text-align: left; color: #1f2937;">
+        
+        <!-- Header & App Name Header -->
+        <div style="display: flex; align-items: center; gap: 16px; margin-bottom: 28px; padding-bottom: 20px; border-bottom: 2px solid #f3f4f6;">
+          <img src="https://images.unsplash.com/photo-1555396273-367ea4eb4db5?auto=format&fit=crop&w=120&h=120&q=80" alt="DASHMEALS Logo" style="width: 64px; height: 64px; border-radius: 18px; object-fit: cover; border: 3px solid #ea580c;" />
+          <div>
+            <span style="font-size: 11px; font-weight: 800; color: #ea580c; text-transform: uppercase; letter-spacing: 0.1em; display: block; margin-bottom: 2px;">Application Officielle</span>
+            <h1 style="margin: 0; font-size: 28px; font-weight: 900; color: #111827; letter-spacing: -0.03em; text-transform: uppercase;">DASHMEALS</h1>
+            <p style="margin: 4px 0 0 0; font-size: 13px; color: #4b5563; font-weight: 600;">Plateforme de Livraison de Repas & Gestion de Restaurants en RDC</p>
+          </div>
+        </div>
+        
+        <!-- Objectif de l'application -->
+        <section style="margin-bottom: 24px; background: #fff7ed; padding: 20px; border-radius: 16px; border: 1px solid #ffedd5;">
+          <h2 style="font-size: 16px; font-weight: 900; color: #9a3412; margin: 0 0 10px 0; text-transform: uppercase; letter-spacing: 0.025em; display: flex; align-items: center; gap: 8px;">
+            📌 Objectif de l'application DASHMEALS
+          </h2>
+          <p style="font-size: 14px; color: #431407; line-height: 1.65; margin: 0;">
+            <strong>DASHMEALS</strong> est une application complète de commande en ligne, livraison de repas à domicile et gestion de restaurants opérant en République Démocratique du Congo (Kinshasa, Lubumbashi, Goma).
+          </p>
+          <ul style="font-size: 13px; color: #511c06; line-height: 1.6; margin: 12px 0 0 0; padding-left: 20px;">
+            <li style="margin-bottom: 6px;"><strong>Pour les clients :</strong> Explorer les menus des restaurants locaux, commander des plats en ligne et suivre la livraison en temps réel.</li>
+            <li style="margin-bottom: 6px;"><strong>Pour les restaurateurs :</strong> Gérer leurs cartes, plats, prix, stocks et accepter les commandes entrantes en direct.</li>
+            <li style="margin-bottom: 0;"><strong>Pour les livreurs :</strong> Recevoir et effectuer les livraisons de repas vers les clients.</li>
+          </ul>
+        </section>
+
+        <!-- Utilisation des données et Google OAuth -->
+        <section style="margin-bottom: 28px; padding: 20px; background-color: #f8fafc; border-radius: 16px; border: 1px solid #e2e8f0;">
+          <h2 style="font-size: 15px; font-weight: 900; color: #0f172a; margin: 0 0 10px 0; text-transform: uppercase; letter-spacing: 0.025em;">
+            🛡️ Utilisation des données & Connexion Google OAuth
+          </h2>
+          <p style="font-size: 13px; color: #334155; line-height: 1.6; margin: 0 0 10px 0;">
+            L'option <strong>"Se connecter avec Google"</strong> permet aux utilisateurs de s'authentifier de manière sécurisée et rapide sur l'application <strong>DASHMEALS</strong> sans créer de mot de passe séparé.
+          </p>
+          <p style="font-size: 13px; color: #334155; line-height: 1.6; margin: 0;">
+            <strong>Données demandées :</strong> DASHMEALS demande uniquement l'accès à votre nom complet et à votre adresse e-mail (profil de base). Ces informations sont utilisées exclusivement pour vous identifier, vous envoyer les confirmations de commande et assurer le service client. DASHMEALS ne partage ni ne vend aucune donnée personnelle à des tiers.
+          </p>
+        </section>
+
+        <!-- Footer / Liens legaux -->
+        <footer style="padding-top: 20px; border-top: 2px solid #f3f4f6; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 14px; font-size: 13px;">
+          <span style="color: #6b7280; font-size: 12px; font-weight: 600;">© 2026 DASHMEALS. Tous droits réservés.</span>
+          <div style="display: flex; gap: 20px;">
+            <a href="/terms.html" style="color: #ea580c; font-weight: 800; text-decoration: underline;">Conditions d'utilisation</a>
+            <a href="/privacy.html" style="color: #ea580c; font-weight: 800; text-decoration: underline;">Politique de confidentialité</a>
+          </div>
+        </footer>
+      </main>
+    </div>
     <script type="module" src="./index.tsx"></script>
   </body>
 </html>

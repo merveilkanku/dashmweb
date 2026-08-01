@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { supabase } from '../lib/supabase';
+import { compressImage, safeUploadPaymentProof } from '../utils/imageCompressor';
 import { KINSHASA_CENTER_LAT, KINSHASA_CENTER_LNG, CITY_COORDINATES, CITIES_RDC, APP_LOGO_URL } from '../constants';
 import { formatDualPrice } from '../utils/format';
 import { Restaurant, UserState, ViewMode, MenuItem, CartItem, User, Order, Promotion, Theme, Language, AppFont, PaymentMethod, MobileMoneyNetwork, SecuritySettings, AppSettings, MealReview, ClaimedOffer } from '../types';
@@ -181,7 +182,7 @@ export const CustomerView: React.FC<Props> = ({ user, allRestaurants, onLogout, 
   // Synchronisation avec les actions de clic de notification push
   useEffect(() => {
     const handleNavigate = () => {
-      console.log("🚀 [CustomerView] Changement de vue vers les commandes via notification push");
+      console.log("[CustomerView] Changement de vue vers les commandes via notification push");
       setViewMode('orders');
     };
     window.addEventListener('navigate_to_order', handleNavigate);
@@ -481,7 +482,7 @@ export const CustomerView: React.FC<Props> = ({ user, allRestaurants, onLogout, 
                 toast.custom((t) => (
                     <div className="bg-white dark:bg-gray-900 border-2 border-[#f97316] shadow-xl rounded-2xl p-4 flex items-start space-x-3 w-[340px] max-w-full">
                         <div className="w-10 h-10 rounded-full bg-[#f97316] text-white flex items-center justify-center font-black text-lg shrink-0 animate-bounce">
-                            <span>🔔</span>
+                            <Bell size={20} />
                         </div>
                         <div className="flex-1 min-w-0">
                             <p className="text-sm font-black text-[#ea580c] truncate">{payload.new.title}</p>
@@ -690,7 +691,7 @@ export const CustomerView: React.FC<Props> = ({ user, allRestaurants, onLogout, 
                 city: user.city || 'Kinshasa'
               }, { onConflict: 'id' });
           } catch (profileErr) {
-            console.warn("⚠️ Impossible de s'assurer de l'existence du profil en base, poursuite de l'abonnement...", profileErr);
+            console.warn("Impossible de s'assurer de l'existence du profil en base, poursuite de l'abonnement...", profileErr);
           }
 
           // Use upsert to handle potential duplicates gracefully at the database level
@@ -712,7 +713,7 @@ export const CustomerView: React.FC<Props> = ({ user, allRestaurants, onLogout, 
               await supabase.from('notifications').insert({
                 user_id: targetRestaurant.ownerId,
                 restaurant_id: targetRestaurant.id,
-                title: 'Nouvel abonné 🎉',
+                title: 'Nouvel abonné',
                 message: `${user.name || 'Un utilisateur'} vient de s'abonner à votre restaurant.`,
                 type: 'info',
                 is_read: false
@@ -797,7 +798,7 @@ export const CustomerView: React.FC<Props> = ({ user, allRestaurants, onLogout, 
 
         // Display modal immediately with code & QR Code
         setActiveClaimedOffer(claimed);
-        toast.success(`🎉 Récompense réclamée ! Votre code d'activation est ${claimed.code}`);
+        toast.success(`Récompense réclamée ! Votre code d'activation est ${claimed.code}`);
     } catch (err) {
         console.error("Error claiming reward:", err);
         toast.error("Erreur lors de la réclamation");
@@ -970,7 +971,7 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
       }
     } catch (err: any) {
       if (err.message === 'TIMEOUT') {
-        console.warn("⚠️ [Profile] Mise à jour standard de la base de données trop longue. Enregistrement local OK.");
+        console.warn("[Profile] Mise à jour standard de la base de données trop longue. Enregistrement local OK.");
         toast.info("Profil sauvegardé pour cette session (synchronisation en arrière-plan...)");
       } else {
         console.error("Error updating profile:", err);
@@ -1201,7 +1202,7 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
       const uiSafetyTimeout = setTimeout(() => {
           setUserState(prev => {
               if (prev.loadingLocation) {
-                  console.warn(`📍 [Location] UI Safety timeout triggered. Using fallback for ${userCity}.`);
+                  console.warn(`[Location] UI Safety timeout triggered. Using fallback for ${userCity}.`);
                   return {
                     ...prev,
                     location: prev.location || cityCoords,
@@ -1310,14 +1311,14 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
 
       // If the user is logged in and their city doesn't match the nearest city detected by GPS
       if (user && user.id !== 'guest' && user.city !== nearestCity) {
-        console.log(`📍 GPS detected nearest city: ${nearestCity} (current user city: ${user.city}). Updating user region.`);
+        console.log(`GPS detected nearest city: ${nearestCity} (current user city: ${user.city}). Updating user region.`);
         updateUserProfile({
           name: user.name || '',
           phoneNumber: user.phoneNumber || '',
           city: nearestCity,
           avatarUrl: user.avatarUrl
         }).then(() => {
-          toast.success(`📍 Région mise à jour automatiquement sur ${nearestCity} (détecté par GPS)`);
+          toast.success(`Région mise à jour automatiquement sur ${nearestCity} (détecté par GPS)`);
         }).catch(err => {
           console.error("Failed to automatically update user city from GPS", err);
         });
@@ -2107,9 +2108,8 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
   // Cart Logic
   const addToCart = (item: MenuItem, restaurant: Restaurant) => {
     if (restaurant && restaurant.isOpen === false) {
-        toast.warning(`⚠️ Cet établissement ("${restaurant.name}") est actuellement fermé. Vous pouvez consulter sa carte, mais les commandes en ligne y sont temporairement désactivées.`, {
-            duration: 6000,
-            icon: '⚠️'
+        toast.warning(`Cet établissement ("${restaurant.name}") est actuellement fermé. Vous pouvez consulter sa carte, mais les commandes en ligne y sont temporairement désactivées.`, {
+            duration: 6000
         });
         return;
     }
@@ -2523,21 +2523,9 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
 
     setIsSubmittingOnboarding(true);
     try {
-        // Upload documents
+        // Upload documents safely with compression
         const uploadDoc = async (file: File, type: string) => {
-            const fileExt = file.name.split('.').pop();
-            const fileName = `${user.id}_${type}_${Date.now()}.${fileExt}`;
-            const { error: uploadError } = await supabase.storage
-                .from('images')
-                .upload(`verifications/${fileName}`, file);
-            
-            if (uploadError) throw uploadError;
-            
-            const { data: { publicUrl } } = supabase.storage
-                .from('images')
-                .getPublicUrl(`verifications/${fileName}`);
-            
-            return publicUrl;
+            return await safeUploadPaymentProof(file, `verification_${type}_${user.id}`);
         };
 
         const idCardUrl = await uploadDoc(idCardFile, 'id_card');
@@ -2735,7 +2723,7 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                         <div className="w-20 h-20 bg-white/20 rounded-[28px] flex items-center justify-center mb-6 backdrop-blur-md shadow-inner">
                             <Package size={40} />
                         </div>
-                        <h2 className="text-3xl font-display font-black uppercase tracking-tight mb-2">Course Privée 📦</h2>
+                        <h2 className="text-3xl font-display font-black uppercase tracking-tight mb-2">Course Privée</h2>
                         <p className="text-orange-100 text-xs font-bold max-w-md">Commandez un livreur pour récupérer un colis, effectuer des achats spécifiques ou livrer vos documents partout à Kinshasa.</p>
                     </div>
                 </div>
@@ -2896,10 +2884,10 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                           <h3 className="text-sm font-black text-gray-900 dark:text-white uppercase tracking-wider">Type de Véhicule Souhaité</h3>
                           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                               {[
-                                  { key: 'moto', label: 'Moto 🛵', desc: 'Rapide' },
-                                  { key: 'velo', label: 'Vélo 🚲', desc: 'Écologique' },
-                                  { key: 'voiture', label: 'Voiture 🚗', desc: 'Colis Large' },
-                                  { key: 'pieton', label: 'Piéton 🚶', desc: 'Proximité' }
+                                  { key: 'moto', label: 'Moto', desc: 'Rapide' },
+                                  { key: 'velo', label: 'Vélo', desc: 'Écologique' },
+                                  { key: 'voiture', label: 'Voiture', desc: 'Colis Large' },
+                                  { key: 'pieton', label: 'Piéton', desc: 'Proximité' }
                               ].map(item => (
                                   <button
                                       key={item.key}
@@ -2918,8 +2906,8 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                           <h3 className="text-sm font-black text-gray-900 dark:text-white uppercase tracking-wider">Mode de Paiement</h3>
                           <div className="grid grid-cols-2 gap-3">
                               {[
-                                  { key: 'cash', label: 'Espèces (Cash) 💵' },
-                                  { key: 'mobile_money', label: 'Mobile Money 📱' }
+                                  { key: 'cash', label: 'Espèces (Cash)' },
+                                  { key: 'mobile_money', label: 'Mobile Money' }
                               ].map(method => (
                                   <button
                                       key={method.key}
@@ -2989,10 +2977,10 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                                                           order.status === 'delivered' || order.status === 'completed' ? 'bg-green-100 text-green-800 dark:bg-green-500/20 dark:text-green-400' :
                                                           'bg-blue-100 text-blue-800 dark:bg-blue-500/20 dark:text-blue-400'
                                                       }`}>
-                                                          {order.status === 'pending' ? 'Recherche livreur ⌛' :
-                                                           order.status === 'cancelled' ? 'Annulé ❌' :
-                                                           order.status === 'delivered' || order.status === 'completed' ? 'Livré ✅' :
-                                                           'En cours 🛵'}
+                                                          {order.status === 'pending' ? 'Recherche livreur' :
+                                                           order.status === 'cancelled' ? 'Annulé' :
+                                                           order.status === 'delivered' || order.status === 'completed' ? 'Livré' :
+                                                           'En cours'}
                                                       </span>
                                                       <h4 className="font-bold text-xs text-gray-900 dark:text-white mt-1.5">Course #{order.id.slice(0, 8)}</h4>
                                                       <p className="text-[9px] text-gray-400 mt-0.5">{order.created_at ? new Date(order.created_at).toLocaleString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'Récemment'}</p>
@@ -3005,20 +2993,20 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
 
                                               <div className="text-xs space-y-1.5 border-t border-gray-100 dark:border-white/5 pt-3 text-gray-600 dark:text-gray-300">
                                                   <div>
-                                                      <strong className="text-gray-900 dark:text-white">📍 Retrait : </strong> 
+                                                      <strong className="text-gray-900 dark:text-white">Retrait : </strong> 
                                                       <span>{item.pickupAddress || 'Non spécifié'}</span>
                                                   </div>
                                                   <div>
-                                                      <strong className="text-gray-900 dark:text-white">🏁 Livraison : </strong> 
+                                                      <strong className="text-gray-900 dark:text-white">Livraison : </strong> 
                                                       <span>{item.deliveryAddress || 'Non spécifié'}</span>
                                                   </div>
                                                   <div>
-                                                      <strong className="text-gray-900 dark:text-white">📦 Colis : </strong> 
+                                                      <strong className="text-gray-900 dark:text-white">Colis : </strong> 
                                                       <span className="italic">{item.description || 'Colis général'}</span>
                                                   </div>
                                                   {(item.recipientName || item.recipientPhone) && (
                                                       <div>
-                                                          <strong className="text-gray-900 dark:text-white">👤 Destinataire : </strong> 
+                                                          <strong className="text-gray-900 dark:text-white">Destinataire : </strong> 
                                                           <span>{item.recipientName || ''} {item.recipientPhone ? `(${item.recipientPhone})` : ''}</span>
                                                       </div>
                                                   )}
@@ -3038,7 +3026,7 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                                                               <Navigation size={12} className="mr-1 animate-pulse text-orange-500" /> Suivi de la course en direct
                                                           </h4>
                                                           <span className="text-[9px] bg-brand-50 dark:bg-brand-500/10 text-brand-600 dark:text-brand-400 px-2 py-0.5 rounded-full font-black uppercase font-sans">
-                                                              {order.status === 'delivered' || order.status === 'completed' ? 'Livrée ✅' : 'En transit 🛵'}
+                                                              {order.status === 'delivered' || order.status === 'completed' ? 'Livrée' : 'En transit'}
                                                           </span>
                                                       </div>
                                                       <DeliveryTrackingMap 
@@ -3376,7 +3364,7 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
             initialIndex={storyStartIndex}
             onAddToCart={(item, resto) => {
                 addToCart(item, resto);
-                toast.success(`🍗 "${item.name}" ajouté au panier !`, { icon: '🛒' });
+                toast.success(`"${item.name}" ajouté au panier !`);
             }}
             currentUser={user}
           />
@@ -3455,7 +3443,7 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
              </div>
 
              <div className="bg-amber-50 dark:bg-amber-950/20 p-4 rounded-2xl border border-amber-200 dark:border-amber-900/30 text-[11px] text-amber-850 dark:text-amber-400 text-left leading-normal space-y-1.5">
-               <p className="font-bold">⚠️ Redirection d'aperçu d'intégration</p>
+               <p className="font-bold">Redirection d'aperçu d'intégration</p>
                <p>
                  Si vous utilisez l'environnement de développement ou si un bloqueur de publicités bloque la redirection automatique, cliquez sur le bouton ci-dessous pour ouvrir le portail de paiement sécurisé dans un nouvel onglet et régler la commande.
                </p>
@@ -3582,7 +3570,7 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                         }}
                         className="w-full bg-red-600 text-white font-bold py-3 rounded-xl hover:bg-red-700 shadow-lg shadow-red-500/30 transition-transform active:scale-95"
                     >
-                        {t('checkout').toUpperCase()} ⚡
+                        {t('checkout').toUpperCase()}
                     </button>
                     <button 
                         onClick={() => {
@@ -3945,7 +3933,7 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                         <ShoppingBag size={140} />
                     </div>
                     <div className="mb-4 md:mb-0 relative z-10 max-w-lg">
-                        <span className="bg-white/20 text-white font-extrabold text-[9px] uppercase tracking-widest px-2.5 py-1 rounded-full">Nouveau Service ⚡</span>
+                        <span className="bg-white/20 text-white font-extrabold text-[9px] uppercase tracking-widest px-2.5 py-1 rounded-full">Nouveau Service</span>
                         <h3 className="text-xl font-black mt-2 leading-tight">Besoin d'une course privée ?</h3>
                         <p className="text-xs text-white/95 mt-1.5 leading-relaxed">Faites livrer ou récupérer un colis, pli, clés ou tout autre objet par un livreur partenaire en un clic ! Forfait simple et rapide.</p>
                     </div>
@@ -3953,7 +3941,7 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                         onClick={() => setViewMode('private_courier')} 
                         className="bg-white text-orange-600 hover:bg-orange-50 active:scale-95 transition-all py-3 px-5 rounded-2xl font-black text-xs uppercase tracking-wider shadow-md self-start md:self-center relative z-10"
                     >
-                        Demander un livreur 📦
+                        Demander un livreur
                     </button>
                 </div>
 
@@ -4263,8 +4251,8 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                         <Zap size={16} className={`mr-1 ${urgentMode ? 'fill-white' : 'fill-none'}`} />
                         Urgent - J'ai faim !
                     </button>
-                    <button className="px-4 py-2 rounded-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 font-medium text-sm whitespace-nowrap shadow-sm">🍖 Grillades</button>
-                    <button className="px-4 py-2 rounded-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 font-medium text-sm whitespace-nowrap shadow-sm">🍗 Poulet</button>
+                    <button className="px-4 py-2 rounded-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 font-medium text-sm whitespace-nowrap shadow-sm">Grillades</button>
+                    <button className="px-4 py-2 rounded-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 font-medium text-sm whitespace-nowrap shadow-sm">Poulet</button>
                 </div>
 
                 {/* CONTENT */}
@@ -4535,7 +4523,7 @@ const compressAndResizeImage = (file: File, maxWidth = 150, maxHeight = 150): Pr
                                 <div className="mb-6 p-4 bg-red-55 px-5 dark:bg-red-950/20 border border-red-200 dark:border-red-900/30 rounded-2xl flex items-start space-x-3.5 text-red-800 dark:text-red-300 shadow-sm">
                                     <AlertTriangle className="shrink-0 mt-0.5 text-red-600 dark:text-red-400 animate-pulse" size={20} />
                                     <div>
-                                        <h4 className="font-extrabold text-sm uppercase tracking-tight">🚫 Établissement actuellement fermé</h4>
+                                        <h4 className="font-extrabold text-sm uppercase tracking-tight">Établissement actuellement fermé</h4>
                                         <p className="text-xs mt-1.5 opacity-90 leading-relaxed font-medium">
                                             Cet établissement n'accepte pas de nouvelles commandes pour le moment. Vous pouvez consulter l'intégralité de la carte et du menu, mais l'ajout de plats au panier est temporairement restreint.
                                         </p>

@@ -8,8 +8,13 @@ import { createClient } from "@supabase/supabase-js";
 import { GoogleGenAI, Type } from "@google/genai";
 import { calculateFullNavigationRoute, formatNavigationAssistantText } from "./utils/routing.js";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const currentFilename = typeof __filename !== "undefined"
+  ? __filename
+  : (typeof import.meta !== "undefined" && import.meta.url ? fileURLToPath(import.meta.url) : process.cwd());
+
+const currentDirname = typeof __dirname !== "undefined"
+  ? __dirname
+  : path.dirname(currentFilename);
 
 // Simple In-Memory Rate Limiter for Admin endpoints
 const adminLimiter = new Map();
@@ -31,14 +36,14 @@ async function startServer() {
 
   // Universal CORS middleware handling origin, headers, credentials, and OPTIONS preflight for all endpoints
   app.use((req, res, next) => {
-    const origin = req.headers.origin || '*';
-    res.setHeader('Access-Control-Allow-Origin', origin);
+    const requestOrigin = req.headers.origin || 'https://dashmeals-rdc.onrender.com';
+    res.setHeader('Access-Control-Allow-Origin', requestOrigin);
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, Access-Control-Allow-Headers, Access-Control-Request-Method, Access-Control-Request-Headers');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     
     if (req.method === 'OPTIONS') {
-      return res.status(200).end();
+      return res.status(200).send('OK');
     }
     next();
   });
@@ -349,7 +354,7 @@ async function startServer() {
 
   app.use(express.json());
 
-  app.post("/api/moneyfusion/create-payment", async (req, res) => {
+  app.post(["/api/moneyfusion/create-payment", "/api/moneyfusion/create-payment/"], async (req, res) => {
     const { planId, restaurantId, amount, currency = "USD", baseUrl: clientBaseUrl } = req.body;
     
     // Safety authorization validation
@@ -784,7 +789,7 @@ async function startServer() {
     }
   };
 
-  app.post("/api/kpay/create-payment", async (req, res) => {
+  app.post(["/api/kpay/create-payment", "/api/kpay/create-payment/"], async (req, res) => {
     const { orderId, amount, currency = "USD", phoneNumber, provider, baseUrl: clientBaseUrl } = req.body;
 
     try {
@@ -1017,8 +1022,9 @@ async function startServer() {
     }
   });
 
-  app.get("/api/kpay/payment-status/:id", async (req, res) => {
-    const { id } = req.params;
+  app.get(["/api/kpay/payment-status/:id", "/api/kpay/payment-status/:id/"], async (req, res) => {
+    const rawId = req.params.id;
+    const id = Array.isArray(rawId) ? rawId[0] : rawId;
 
     try {
       if (!id || id.startsWith("demo_kpay_")) {
@@ -1267,6 +1273,11 @@ async function startServer() {
     const isProd = process.env.NODE_ENV === "production";
     const dir = isProd ? path.join(process.cwd(), "dist") : path.join(process.cwd(), "public");
     res.sendFile(path.join(dir, "terms.html"));
+  });
+
+  app.get("/google89d4716ae4439c3c.html", (req, res) => {
+    res.setHeader("Content-Type", "text/html");
+    res.send("google-site-verification: google89d4716ae4439c3c.html");
   });
 
   // Navigation Route API endpoint for DashMeals Navigation Assistant

@@ -113,7 +113,7 @@ export const PaymentResult: React.FC<Props> = ({ status, onReturn }) => {
                   const emailHtml = `
                     <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e5e7eb; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
                       <div style="background: linear-gradient(135deg, #ea580c 0%, #ff7e33 100%); padding: 30px; text-align: center; color: white;">
-                        <h1 style="margin: 0; font-size: 24px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px;">Forfait Activé 🎉</h1>
+                        <h1 style="margin: 0; font-size: 24px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px;">Forfait Activé</h1>
                         <p style="margin: 10px 0 0 0; font-size: 14px; opacity: 0.9;">Votre restaurant ${restaurant.name} passe au niveau supérieur !</p>
                       </div>
                       <div style="padding: 30px; color: #1f2937; line-height: 1.6;">
@@ -133,7 +133,7 @@ export const PaymentResult: React.FC<Props> = ({ status, onReturn }) => {
                             </tr>
                             <tr>
                               <td style="padding: 6px 0; color: #4b5563; font-weight: 500;">Statut :</td>
-                              <td style="padding: 6px 0; text-align: right; font-weight: bold; color: #10b981;">Actif ✅</td>
+                              <td style="padding: 6px 0; text-align: right; font-weight: bold; color: #10b981;">Actif</td>
                             </tr>
                             <tr>
                               <td style="padding: 6px 0; color: #4b5563; font-weight: 500;">Date de renouvellement :</td>

@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
-import { X, Trash2, ShoppingBag, CreditCard, Banknote, ArrowLeft, Phone, CheckCircle2, Smartphone, MapPin, Map, Camera } from 'lucide-react';
+import { X, Trash2, ShoppingBag, CreditCard, Banknote, ArrowLeft, Phone, CheckCircle2, Smartphone, MapPin, Map, Camera, Bike, Tag, Zap, Package } from 'lucide-react';
 import { CartItem, RestaurantPaymentConfig, PaymentMethod, MobileMoneyNetwork, Language } from '../types';
 import { formatDualPrice } from '../utils/format';
 import { LocationPicker } from './LocationPicker';
 import { useTranslation } from '../lib/i18n';
 import { toast } from 'sonner';
 import { supabase } from '../lib/supabase';
+import { safeUploadPaymentProof } from '../utils/imageCompressor';
 
 interface Props {
   isOpen: boolean;
@@ -266,7 +267,7 @@ export const CartDrawer: React.FC<Props> = ({
                   onClick={() => setFulfillmentMode('delivery')}
                   className={`py-3 rounded-xl font-bold text-xs transition-all flex items-center justify-center space-x-1.5 ${fulfillmentMode === 'delivery' ? 'bg-white text-brand-700 shadow-sm' : 'text-gray-500 hover:text-gray-800'}`}
                 >
-                  <span className="text-base">🛵</span>
+                  <Bike size={16} />
                   <span>Livraison</span>
                 </button>
                 <button
@@ -274,7 +275,7 @@ export const CartDrawer: React.FC<Props> = ({
                   onClick={() => setFulfillmentMode('pickup')}
                   className={`py-3 rounded-xl font-bold text-xs transition-all flex items-center justify-center space-x-1.5 ${fulfillmentMode === 'pickup' ? 'bg-white text-brand-700 shadow-sm' : 'text-gray-500 hover:text-gray-800'}`}
                 >
-                  <span className="text-base">🥡</span>
+                  <ShoppingBag size={16} />
                   <span>À emporter</span>
                 </button>
               </div>
@@ -347,7 +348,7 @@ export const CartDrawer: React.FC<Props> = ({
               ) : (
                 <div className="bg-amber-50/50 border-2 border-dashed border-amber-200 rounded-2xl p-5 space-y-3 animate-in fade-in duration-300">
                   <div className="flex items-center space-x-2 text-amber-800">
-                    <span className="text-xl">🥡</span>
+                    <ShoppingBag size={20} />
                     <span className="text-sm font-extrabold font-display">Retrait direct au restaurant</span>
                   </div>
                   <p className="text-xs text-amber-700 leading-relaxed font-sans">
@@ -364,9 +365,10 @@ export const CartDrawer: React.FC<Props> = ({
                       {(restaurantDetails.phoneNumber || restaurantDetails.phone_number) && (
                         <a 
                           href={`tel:${(restaurantDetails.phoneNumber || restaurantDetails.phone_number || '+243812345678').replace(/\s+/g, '')}`}
-                          className="text-xs font-mono text-emerald-600 font-bold flex items-center pt-1 hover:underline"
+                          className="text-xs font-mono text-emerald-600 font-bold flex items-center pt-1 hover:underline space-x-1"
                         >
-                          📞 {restaurantDetails.phoneNumber || restaurantDetails.phone_number}
+                          <Phone size={12} className="inline mr-1" />
+                          <span>{restaurantDetails.phoneNumber || restaurantDetails.phone_number}</span>
                         </a>
                       )}
                     </div>
@@ -387,7 +389,7 @@ export const CartDrawer: React.FC<Props> = ({
               <div className="bg-red-50 border border-red-100 rounded-2xl p-4 flex items-center justify-between shadow-sm">
                 <div className="flex items-center">
                   <div className="w-10 h-10 bg-red-100 rounded-full flex items-center justify-center mr-3">
-                    <span className="text-xl">🚀</span>
+                    <Zap size={20} className="text-red-600" />
                   </div>
                   <div>
                     <p className="font-bold text-red-800">Mode Urgent</p>
@@ -552,26 +554,15 @@ export const CartDrawer: React.FC<Props> = ({
                               if (file) {
                                 setIsUploadingProof(true);
                                 try {
-                                  const fileExt = file.name.split('.').pop();
-                                  const fileName = `${Math.random().toString(36).substring(2, 15)}_${Date.now()}.${fileExt}`;
-                                  const filePath = `payment_proofs/${fileName}`;
-                                  
-                                  const { error: uploadError } = await supabase.storage
-                                    .from('images')
-                                    .upload(filePath, file);
-
-                                  if (uploadError) throw uploadError;
-
-                                  const { data } = supabase.storage
-                                    .from('images')
-                                    .getPublicUrl(filePath);
-
-                                  setPaymentProof(data.publicUrl);
+                                  const proofUrl = await safeUploadPaymentProof(file, 'checkout_proof');
+                                  setPaymentProof(proofUrl);
+                                  toast.success("Preuve de paiement enregistrée !");
                                 } catch (error) {
-                                  console.error('Error uploading payment proof:', error);
-                                  toast.error("Erreur lors de l'upload de l'image");
+                                  console.error('Error processing payment proof:', error);
+                                  toast.error("Erreur lors de la prise en charge de l'image");
                                 } finally {
                                   setIsUploadingProof(false);
+                                  if (e.target) e.target.value = '';
                                 }
                               }
                             }}
@@ -724,7 +715,10 @@ export const CartDrawer: React.FC<Props> = ({
                     <span className="font-semibold line-through text-gray-400">{formatPrice(total / (1 - discountPercentage / 100))}</span>
                   </div>
                   <div className="flex justify-between text-emerald-600 font-bold bg-emerald-50 px-2 py-1.5 rounded-lg">
-                    <span className="flex items-center">🏷️ Réduction IA (-{discountPercentage}%)</span>
+                    <span className="flex items-center space-x-1">
+                      <Tag size={14} className="inline mr-1" />
+                      <span>Réduction IA (-{discountPercentage}%)</span>
+                    </span>
                     <span>-{formatPrice((total / (1 - discountPercentage / 100)) * (discountPercentage / 100))}</span>
                   </div>
                 </>
@@ -735,7 +729,9 @@ export const CartDrawer: React.FC<Props> = ({
                 </div>
               )}
               <div className="flex justify-between text-gray-500">
-                <span>Frais de livraison ({isCDF ? "Prix adapté" : "Livreur"}) 🛵</span>
+                <span className="flex items-center space-x-1">
+                  <span>Frais de livraison ({isCDF ? "Prix adapté" : "Livreur"})</span>
+                </span>
                 <span className="font-semibold">{formatPrice(deliveryFeeInCurrency)}</span>
               </div>
             </div>

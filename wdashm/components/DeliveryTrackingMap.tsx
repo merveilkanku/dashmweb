@@ -204,12 +204,12 @@ export const DeliveryTrackingMap: React.FC<Props> = ({ order, restaurant }) => {
             <div className="text-xs font-semibold p-1">
               {isPrivateCourier ? (
                 <>
-                  <span className="text-orange-600 font-bold block">📦 Point de Retrait</span>
+                  <span className="text-orange-600 font-bold block">Point de Retrait</span>
                   <span>{order.items?.[0]?.pickupAddress || "Départ de la course"}</span>
                 </>
               ) : (
                 <>
-                  <span className="text-orange-600 font-bold block">🍔 Restaurant</span>
+                  <span className="text-orange-600 font-bold block">Restaurant</span>
                   <span>{restaurant?.name || 'Départ'}</span>
                 </>
               )}
@@ -221,7 +221,7 @@ export const DeliveryTrackingMap: React.FC<Props> = ({ order, restaurant }) => {
         <Marker position={[destination.lat, destination.lng]} icon={customerIcon}>
           <Popup>
             <div className="text-xs font-semibold p-1">
-              <span className="text-blue-600 font-bold block">🏁 Point de Livraison</span>
+              <span className="text-blue-600 font-bold block">Point de Livraison</span>
               <span>{order.deliveryLocation?.address || 'Destination'}</span>
             </div>
           </Popup>
@@ -232,7 +232,7 @@ export const DeliveryTrackingMap: React.FC<Props> = ({ order, restaurant }) => {
           <Marker position={[deliveryPos.latitude, deliveryPos.longitude]} icon={deliveryIcon}>
             <Popup>
               <div className="text-xs font-semibold p-1">
-                <span className="text-brand-600 font-bold block">🛵 Livreur DashMeals</span>
+                <span className="text-brand-600 font-bold block">Livreur DashMeals</span>
                 {order.status === 'delivering' ? (
                   <span>En mouvement vers la destination</span>
                 ) : (

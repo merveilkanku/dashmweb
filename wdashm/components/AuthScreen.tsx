@@ -129,6 +129,7 @@ export const AuthScreen: React.FC<Props> = ({ onLogin, isSupabaseReachable = tru
       // Origin check - be more lenient in development/preview environments
       const isAllowedOrigin = event.origin === window.location.origin || 
                              event.origin.includes('.run.app') || 
+                             event.origin.includes('onrender.com') ||
                              event.origin.includes('localhost') ||
                              event.origin.includes('stripe.com'); // Allow stripe for JS SDK
                              
@@ -190,81 +191,83 @@ export const AuthScreen: React.FC<Props> = ({ onLogin, isSupabaseReachable = tru
       }));
 
       // --- STRATÉGIE AUTHENTIFICATION ---
-      // Détection de l'environnement (Capacitor native ou Web)
+      // Détection de l'environnement (Capacitor native, Iframe ou Web standard)
       const isNative = Capacitor.getPlatform() !== 'web';
+      const isIframe = window.self !== window.top;
       
-      // Configuration de l'URL de redirection
-      // IMPORTANT: Ces URLs doivent être ajoutées dans "Redirect URLs" sur le dashboard Supabase !
-      const isRender = window.location.hostname.includes('onrender.com');
-      const RENDER_PROD_URL = "https://dashmeals-rdc.onrender.com";
-      const MOBILE_SCHEME = "com.dashmeals.android://callback";
+      const MOBILE_SCHEME = "com.dashmeals.app://callback";
       
-      let redirectTo = "https://dashmeals-rdc.onrender.com";
-      
-      if (isNative) {
-        redirectTo = MOBILE_SCHEME;
-      } else if (isRender) {
-        redirectTo = RENDER_PROD_URL;
-      }
+      // Sur Web, l'URL de retour est l'origine actuelle
+      const redirectTo = isNative ? MOBILE_SCHEME : window.location.origin;
 
-      console.log("📱 [Auth] Environnement:", isNative ? "NATIVE/APK" : "WEB");
+      console.log("📱 [Auth] Environnement:", isNative ? "NATIVE/APK" : isIframe ? "IFRAME/PREVIEW" : "WEB STANDALONE");
       console.log("🔗 [Auth] URL de retour (redirectTo):", redirectTo);
       
+      // En Web standalone (ex: dashmeals-rdc.onrender.com), on laisse Supabase rediriger directement la page principale.
+      // En Iframe ou APK native, on utilise un popup / navigateur système pour éviter le blocage X-Frame-Options.
+      const usePopup = isIframe || isNative;
+
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: provider,
         options: {
           redirectTo: redirectTo,
-          // Sur APK, on récupère l'URL pour l'ouvrir dans le navigateur système
-          skipBrowserRedirect: isNative, 
+          skipBrowserRedirect: usePopup, 
           queryParams: {
             access_type: 'offline',
-            prompt: 'consent',
+            prompt: 'select_account',
           },
         }
       });
       
       if (error) throw error;
 
-      if (data?.url) {
+      if (usePopup && data?.url) {
         if (isNative) {
-            // Sur APK, on DOIT ouvrir le navigateur système pour que le Deep Link fonctionne au retour
-            // window.open(url, '_system') est la méthode standard Capacitor pour ouvrir le navigateur externe
-            console.log("🌍 [Auth] Ouverture du navigateur système pour login...");
-            window.open(data.url, '_system');
-            
-            // On peut arrêter le loading ici car l'utilisateur quitte l'application momentanément
-            setLoading(false);
+          // Sur APK, on ouvre le navigateur système pour le Deep Link
+          console.log("🌍 [Auth] Ouverture du navigateur système pour login Native...");
+          window.open(data.url, '_system');
+          setLoading(false);
         } else {
-            // Sur Web, on utilise une popup standard
-            const width = 500;
-            const height = 650;
-            const left = window.screen.width / 2 - width / 2;
-            const top = window.screen.height / 2 - height / 2;
-            
-            const popup = window.open(
-              data.url,
-              'oauth_popup',
-              `width=${width},height=${height},left=${left},top=${top},status=no,menubar=no,toolbar=no`
-            );
+          // Dans une iframe (ex: preview AI Studio), on ouvre une popup centrée qui se fermera automatiquement après succès
+          console.log("🌍 [Auth] Ouverture de la popup Google OAuth dans l'iframe...");
+          const width = 520;
+          const height = 630;
+          const left = window.screenX + (window.innerWidth - width) / 2;
+          const top = window.screenY + (window.innerHeight - height) / 2;
+          
+          const popup = window.open(
+            data.url,
+            'google_oauth_popup',
+            `width=${width},height=${height},top=${top},left=${left},status=no,resizable=yes,scrollbars=yes`
+          );
 
-            if (!popup) {
-                setError("Le popup a été bloqué par votre navigateur.");
-                setLoading(false);
-                return;
+          if (!popup || popup.closed || typeof popup.closed === 'undefined') {
+            // Si les popups sont bloquées par le navigateur, ouvrir dans un nouvel onglet
+            toast.info("Fenêtre popup bloquée par le navigateur, ouverture dans un nouvel onglet.");
+            window.open(data.url, '_blank');
+          }
+
+          // Surveiller si la popup est fermée manuellement avant connexion
+          const checkPopupClosed = setInterval(() => {
+            if (popup && popup.closed) {
+              clearInterval(checkPopupClosed);
+              setLoading(false);
             }
-
-            const timer = setInterval(() => {
-                if (popup.closed) {
-                    clearInterval(timer);
-                    setLoading(false); 
-                }
-            }, 1000);
+          }, 1000);
         }
+      } else if (!usePopup) {
+        // En mode Web direct, Supabase redirige la fenêtre courante automatiquement.
+        console.log("🌍 [Auth] Redirection directe vers Google OAuth dans le même onglet...");
       }
 
     } catch (err: any) {
       console.error("OAuth Error:", err);
-      setError(err.message || "Erreur de connexion sociale");
+      let msg = err.message || "Erreur de connexion sociale";
+      if (msg.includes("provider is not enabled") || msg.includes("Unsupported provider")) {
+        msg = "L'authentification Google n'est pas encore activée dans le tableau de bord Supabase (Authentication > Providers > Google).";
+      }
+      setError(msg);
+      toast.error(msg);
       setLoading(false);
     }
   };
@@ -645,8 +648,8 @@ export const AuthScreen: React.FC<Props> = ({ onLogin, isSupabaseReachable = tru
             <div className="flex items-center space-x-2.5 bg-black/40 backdrop-blur-md px-3 py-1.5 rounded-2xl border border-white/15">
               <img src={APP_LOGO_URL} alt="DashMeals Logo" className="w-8 h-8 rounded-xl object-cover ring-2 ring-brand-500" />
               <div>
-                <span className="font-display font-black text-white text-xs uppercase tracking-tight block">DashMeals RDC</span>
-                <span className="text-[9px] text-brand-300 font-bold tracking-wider block uppercase">Kinshasa & Provinces</span>
+                <span className="font-display font-black text-white text-xs uppercase tracking-tight block">DASHMEALS</span>
+                <span className="text-[9px] text-brand-300 font-bold tracking-wider block uppercase">Livraison & Restaurants (RDC)</span>
               </div>
             </div>
             
@@ -720,7 +723,7 @@ export const AuthScreen: React.FC<Props> = ({ onLogin, isSupabaseReachable = tru
                  <img src={APP_LOGO_URL} alt="DashMeals Logo" className="w-full h-full object-cover" />
               </div>
               <div className="relative z-10 text-center">
-                 <h1 className="text-xl sm:text-2xl font-display font-black text-white tracking-tight uppercase leading-none">DashMeals <span className="text-brand-200">RDC</span></h1>
+                 <h1 className="text-xl sm:text-2xl font-display font-black text-white tracking-tight uppercase leading-none">DASHMEALS</h1>
                  <p className="text-brand-50 mt-1 font-medium text-[10px] sm:text-xs tracking-wide opacity-90 uppercase">Connexion & Inscription</p>
               </div>
             </div>
@@ -1274,13 +1277,46 @@ export const AuthScreen: React.FC<Props> = ({ onLogin, isSupabaseReachable = tru
         />
       )}
 
-      {/* Google OAuth Compliance Policy Footer */}
-      <div className="mt-8 text-center text-[10px] text-gray-400 font-bold uppercase tracking-widest relative z-10 px-4 space-y-2 max-w-sm mx-auto">
-        <p className="opacity-80">© 2026 DashMeals RDC. Tous droits réservés.</p>
-        <div className="flex justify-center space-x-3 text-[11px] normal-case tracking-normal">
-          <a href="/terms.html" className="text-gray-500 hover:text-brand-700 dark:hover:text-brand-400 transition-colors uppercase text-[9px] tracking-wider font-extrabold">Terms of Service</a>
-          <span className="text-gray-300 dark:text-gray-700">•</span>
-          <a href="/privacy.html" className="text-rose-500 hover:text-rose-700 transition-colors uppercase text-[9px] tracking-wider font-extrabold">Privacy Policy</a>
+      {/* Section d'information publique & Conformité Google OAuth */}
+      <div className="mt-8 text-left text-xs relative z-10 px-4 max-w-2xl mx-auto pb-10">
+        <div className="bg-white/95 dark:bg-slate-900/95 backdrop-blur-md p-6 sm:p-7 rounded-2xl border border-gray-200/90 dark:border-gray-800 shadow-md space-y-4">
+          <div>
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <h3 className="font-display font-black text-sm sm:text-base text-gray-900 dark:text-white uppercase tracking-tight flex items-center gap-2">
+                <Utensils size={18} className="text-brand-600" />
+                <span>Nom de l'application : <span className="text-brand-600">DASHMEALS</span></span>
+              </h3>
+              <span className="bg-brand-50 dark:bg-brand-950/50 text-brand-700 dark:text-brand-300 text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase border border-brand-200 dark:border-brand-800">
+                Identité Officielle
+              </span>
+            </div>
+            <p className="leading-relaxed text-gray-700 dark:text-gray-200 text-xs font-medium">
+              <strong>DASHMEALS</strong> est une application complète de commande en ligne, de livraison de repas et de gestion de restaurants opérant en République Démocratique du Congo (Kinshasa, Lubumbashi, Goma).
+            </p>
+            <ul className="mt-2.5 space-y-1.5 text-xs text-gray-600 dark:text-gray-300 pl-4 list-disc">
+              <li><strong>Commande & Livraison :</strong> Permet aux clients de parcourir les cartes des restaurants, passer des commandes et suivre la livraison.</li>
+              <li><strong>Gestion des restaurants :</strong> Offre aux restaurateurs des outils de gestion des menus, plats, stocks et commandes.</li>
+            </ul>
+          </div>
+
+          <div className="pt-3.5 border-t border-gray-150 dark:border-gray-800">
+            <h4 className="font-bold text-xs text-gray-900 dark:text-gray-100 flex items-center gap-1.5 mb-1.5">
+              <ShieldCheck size={16} className="text-emerald-500" />
+              <span>Authentification Google OAuth & Utilisation des données</span>
+            </h4>
+            <p className="leading-relaxed text-gray-600 dark:text-gray-300 text-[11px]">
+              L'utilisation du bouton <strong>"Se connecter avec Google"</strong> permet de créer un compte et d'accéder à l'application <strong>DASHMEALS</strong> en toute sécurité. Seules les données de profil de base (nom complet et adresse email) sont demandées pour créer votre profil et vous notifier de l'état de vos commandes. DASHMEALS ne partage ni ne vend vos données.
+            </p>
+          </div>
+
+          <div className="pt-3.5 border-t border-gray-150 dark:border-gray-800 flex flex-wrap items-center justify-between text-[11px] gap-2">
+            <span className="font-semibold text-gray-500 dark:text-gray-400">© 2026 DASHMEALS. Tous droits réservés.</span>
+            <div className="flex items-center space-x-3 font-bold">
+              <a href="/terms.html" className="text-brand-600 hover:text-brand-700 dark:text-brand-400 underline">Conditions d'utilisation</a>
+              <span className="text-gray-300 dark:text-gray-700">•</span>
+              <a href="/privacy.html" className="text-brand-600 hover:text-brand-700 dark:text-brand-400 underline">Politique de confidentialité</a>
+            </div>
+          </div>
         </div>
       </div>
     </div>

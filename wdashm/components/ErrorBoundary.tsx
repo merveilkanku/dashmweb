@@ -27,7 +27,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
   }
 
   public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error("💥 [ErrorBoundary] Crash intercepté:", error, errorInfo);
+    console.error("[ErrorBoundary] Crash intercepté:", error, errorInfo);
   }
 
   private handleReset = () => {

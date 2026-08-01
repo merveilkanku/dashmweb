@@ -263,7 +263,7 @@ export const MapView: React.FC<Props> = ({
                             </span>
                         )}
                         <span className="flex items-center font-bold text-amber-500">
-                            ★ {resto.rating}
+                            <Star size={12} className="mr-0.5 fill-amber-400 text-amber-400" /> {resto.rating}
                         </span>
                     </div>
                  </div>

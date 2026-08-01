@@ -13,10 +13,10 @@ if (typeof window !== 'undefined') {
     const originalFetch = window.fetch;
     const patchedFetch = function (input: RequestInfo | URL, init?: RequestInit) {
       const origin = window.location.origin;
-      const isNative = origin.startsWith('file:') || origin.startsWith('capacitor:') || origin.includes('localhost') || !origin.includes('.run.app');
+      const isNative = origin.startsWith('file:') || origin.startsWith('capacitor:');
       
       if (isNative) {
-        const backendUrl = 'https://ais-pre-vhkhcvkc54fgkbq75rumca-150789858029.europe-west2.run.app';
+        const backendUrl = 'https://dashmeals-rdc.onrender.com';
         
         if (typeof input === 'string' && input.startsWith('/api')) {
           console.log(`🌐 [Native API Redirect] Intercepting fetch: ${input} -> ${backendUrl}${input}`);
@@ -62,9 +62,6 @@ if (typeof window !== 'undefined') {
   }
 }
 
-// Check if we are in a popup callback (OAuth redirect)
-const isPopupCallback = window.opener && (window.location.hash.includes('access_token') || window.location.search.includes('code='));
-
 const rootElement = document.getElementById('root');
 if (!rootElement) {
   throw new Error("Could not find root element to mount to");
@@ -72,79 +69,25 @@ if (!rootElement) {
 
 const root = ReactDOM.createRoot(rootElement);
 
-if (isPopupCallback) {
-  // We are the popup! Handle the callback.
-  
-  const handleAuth = async () => {
+if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
+  window.addEventListener('load', () => {
     try {
-        // Wait a bit for Supabase to process the URL fragments
-        await new Promise(resolve => setTimeout(resolve, 500));
-        
-        // Get the session that should have been set by the client initialization
-        const { data: { session }, error } = await supabase.auth.getSession();
-        
-        if (session) {
-            // Notify opener with session data
-            window.opener.postMessage({ type: 'OAUTH_SUCCESS', session }, window.location.origin);
-            // Give time for message to be received before closing
-            setTimeout(() => window.close(), 1000);
-        } else {
-            // If no session yet, listen for it
-            const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-                if ((event === 'SIGNED_IN' || event === 'INITIAL_SESSION') && session) {
-                    window.opener.postMessage({ type: 'OAUTH_SUCCESS', session }, window.location.origin);
-                    subscription.unsubscribe();
-                    setTimeout(() => window.close(), 1000);
-                }
-            });
-            
-            // Timeout after 10 seconds if no session
-            setTimeout(() => {
-                subscription.unsubscribe();
-                if (!window.closed) {
-                    window.opener.postMessage({ type: 'OAUTH_ERROR', error: "Délai d'attente dépassé" }, window.location.origin);
-                    window.close();
-                }
-            }, 10000);
-        }
-    } catch (err: any) {
-        console.error("Popup Auth Exception:", err);
-        window.opener.postMessage({ type: 'OAUTH_ERROR', error: err.message }, window.location.origin);
-        setTimeout(() => window.close(), 2000);
+      navigator.serviceWorker.register('./sw.js').then(registration => {
+        console.log('SW registered: ', registration);
+      }).catch(registrationError => {
+        console.log('SW registration failed: ', registrationError);
+      });
+    } catch (err) {
+      console.warn('SW registration skipped or failed:', err);
     }
-  };
-
-  handleAuth();
-
-  root.render(
-    <div className="flex flex-col items-center justify-center min-h-screen bg-gray-50 p-4 text-center">
-      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-brand-600 mb-4"></div>
-      <h2 className="text-xl font-bold text-gray-800">Authentification...</h2>
-      <p className="text-gray-500">Veuillez patienter pendant que nous finalisons votre connexion.</p>
-    </div>
-  );
-} else {
-// Normal app render
-  if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
-    window.addEventListener('load', () => {
-      try {
-        navigator.serviceWorker.register('./sw.js').then(registration => {
-          console.log('SW registered: ', registration);
-        }).catch(registrationError => {
-          console.log('SW registration failed: ', registrationError);
-        });
-      } catch (err) {
-        console.warn('SW registration skipped or failed:', err);
-      }
-    });
-  }
-
-  root.render(
-    <React.StrictMode>
-      <ErrorBoundary>
-        <Toaster position="top-center" richColors />
-        <App />
-      </ErrorBoundary>
-    </React.StrictMode>
-  );
+  });
 }
+
+root.render(
+  <React.StrictMode>
+    <ErrorBoundary>
+      <Toaster position="top-center" richColors />
+      <App />
+    </ErrorBoundary>
+  </React.StrictMode>
+);

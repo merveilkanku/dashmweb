@@ -5,17 +5,17 @@ import { useLiveDeliveryLocation } from '../hooks/useLiveDeliveryLocation';
 import { useRoute } from '../hooks/useRoute';
 
 // Icônes personnalisées élégantes
-const createIcon = (emoji: string, bg: string, ringColor: string = 'white') =>
+const createSvgIcon = (svgPath: string, bg: string, ringColor: string = 'white') =>
   L.divIcon({
-    html: `<div class="flex items-center justify-center rounded-full border-2 shadow-lg animate-in zoom-in duration-300" style="background:${bg}; border-color:${ringColor}; width:36px; height:36px; font-size:18px;">${emoji}</div>`,
+    html: `<div class="flex items-center justify-center rounded-full border-2 shadow-lg animate-in zoom-in duration-300" style="background:${bg}; border-color:${ringColor}; width:36px; height:36px;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${svgPath}</svg></div>`,
     className: '',
     iconSize: [36, 36],
     iconAnchor: [18, 18],
   });
 
-const restaurantIcon = createIcon('🏪', '#ea580c', '#ffedd5'); // Orange / Warm ring
-const customerIcon = createIcon('📍', '#2563eb', '#dbeafe'); // Blue / Light blue ring
-const bikeIcon = createIcon('🛵', '#10b981', '#ecfdf5'); // Green live rider / Light green ring
+const restaurantIcon = createSvgIcon('<path d="m2 7 4.41-4.41A2 2 0 0 1 7.83 2h8.34a2 2 0 0 1 1.42.59L22 7"/><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><path d="M15 22v-4a2 2 0 0 0-2-2h-2a2 2 0 0 0-2 2v4"/><path d="M2 7h20"/>', '#ea580c', '#ffedd5'); // Restaurant SVG
+const customerIcon = createSvgIcon('<path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/>', '#2563eb', '#dbeafe'); // Map pin SVG
+const bikeIcon = createSvgIcon('<circle cx="18.5" cy="17.5" r="3.5"/><circle cx="5.5" cy="17.5" r="3.5"/><circle cx="15" cy="5" r="1"/><path d="M12 17.5V14l-3-3 4-3 2 3h2"/>', '#10b981', '#ecfdf5'); // Bike SVG
 
 // Interpolation linéaire entre l'ancienne et la nouvelle position (anti-saccade)
 function useSmoothPosition(target: { lat: number; lng: number } | null) {
@@ -145,7 +145,7 @@ export const LiveDeliveryMap: React.FC<Props> = ({
       {/* Overlay d'informations d'itinéraire réel d'OSRM */}
       {route && (
         <div className="absolute bottom-3 left-3 z-[400] bg-white/95 dark:bg-gray-900/95 backdrop-blur px-3 py-2 rounded-xl shadow-lg border border-gray-100 dark:border-gray-800 text-xs font-bold text-gray-800 dark:text-gray-200 animate-in fade-in duration-300 flex flex-col space-y-0.5">
-          <span className="text-[10px] uppercase font-black tracking-widest text-brand-600 dark:text-brand-400">🏍️ Temps réel estimé</span>
+          <span className="text-[10px] uppercase font-black tracking-widest text-brand-600 dark:text-brand-400">Temps réel estimé</span>
           <span className="text-sm font-extrabold text-gray-900 dark:text-white">
             {route.distanceKm} km • ~{route.durationMin} min
           </span>
@@ -193,7 +193,7 @@ export const LiveDeliveryMap: React.FC<Props> = ({
             <Popup>
               <div className="text-xs p-1">
                 <span className="font-bold text-orange-600 block">
-                  {isPrivateCourier ? '📦 Point de Retrait' : '🏪 Restaurant'}
+                  {isPrivateCourier ? 'Point de Retrait' : 'Restaurant'}
                 </span>
                 <span className="text-gray-500">Point de départ de la livraison</span>
               </div>
@@ -206,7 +206,7 @@ export const LiveDeliveryMap: React.FC<Props> = ({
           <Marker position={[customerCoords.lat, customerCoords.lng]} icon={customerIcon}>
             <Popup>
               <div className="text-xs p-1">
-                <span className="font-bold text-blue-600 block">🏁 Destination</span>
+                <span className="font-bold text-blue-600 block">Destination</span>
                 <span className="text-gray-500">Adresse de livraison de la commande</span>
               </div>
             </Popup>
@@ -218,7 +218,7 @@ export const LiveDeliveryMap: React.FC<Props> = ({
           <Marker position={[smoothed.lat, smoothed.lng]} icon={bikeIcon}>
             <Popup>
               <div className="text-xs p-1 text-center">
-                <span className="font-bold text-emerald-600 block">🛵 Votre Livreur</span>
+                <span className="font-bold text-emerald-600 block">Votre Livreur</span>
                 {isLive ? (
                   <span className="text-[10px] text-green-600 bg-green-50 px-1.5 py-0.5 rounded font-bold uppercase">Actif</span>
                 ) : (

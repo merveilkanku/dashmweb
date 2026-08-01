@@ -241,7 +241,7 @@ export const ChatWindow: React.FC<Props> = ({ orderId, currentUser, otherUserId,
       
       // Auto-healing fallback: si la colonne recipient_id n'existe pas dans la base de données
       if (error && (error.code === '42703' || error.message?.includes('recipient_id'))) {
-        console.warn("⚠️ [Chat] Colonne 'recipient_id' manquante dans la table 'messages'. Nouvelle tentative d'envoi sans ce champ...");
+        console.warn("[Chat] Colonne 'recipient_id' manquante dans la table 'messages'. Nouvelle tentative d'envoi sans ce champ...");
         const fallbackPayload = {
           order_id: msgPayload.order_id,
           sender_id: msgPayload.sender_id,

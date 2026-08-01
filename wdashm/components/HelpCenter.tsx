@@ -34,7 +34,7 @@ const getHelpContent = (appSettings?: AppSettings | null): HelpSection[] => [
       {
         id: 'full-experience',
         title: 'Comment utiliser DashMeals à 100% de son potentiel ?',
-        content: "Pour vivre l'expérience DashMeals à 100% :\n\n1️⃣ **Profil complet** : Renseignez vos numéros actifs pour le paiement Mobile Money (M-Pesa, Orange Money, Airtel Money) et la livraison.\n2️⃣ **Géolocalisation précise** : Activez le GPS pour permettre aux livreurs de localiser exactement votre adresse à Kinshasa, Lubumbashi ou Goma sans approximations.\n3️⃣ **Notifications en direct** : Autorisez les notifications système pour suivre la préparation et la livraison de votre repas en temps réel.\n4️⃣ **Statut de présence 'Style Facebook'** : Observez le voyant vert pour voir quand votre livreur ou le restaurant est actif et disponible.",
+        content: "Pour vivre l'expérience DashMeals à 100% :\n\n1. **Profil complet** : Renseignez vos numéros actifs pour le paiement Mobile Money (M-Pesa, Orange Money, Airtel Money) et la livraison.\n2. **Géolocalisation précise** : Activez le GPS pour permettre aux livreurs de localiser exactement votre adresse à Kinshasa, Lubumbashi ou Goma sans approximations.\n3. **Notifications en direct** : Autorisez les notifications système pour suivre la préparation et la livraison de votre repas en temps réel.\n4. **Statut de présence 'Style Facebook'** : Observez le voyant vert pour voir quand votre livreur ou le restaurant est actif et disponible.",
         tags: ['débutant', 'profil', 'gps']
       },
       {
@@ -160,7 +160,7 @@ const getHelpContent = (appSettings?: AppSettings | null): HelpSection[] => [
       {
         id: 'official-contacts',
         title: 'Quelles sont nos coordonnées officielles et adresses en RDC ?',
-        content: `Notre centre de support et nos bureaux administratifs sont basés à Kinshasa, RDC :\n\n- 📧 **E-mail** : ${appSettings?.support_email || 'support@dashmeals-rdc.com'}\n- 📞 **Téléphone d'urgence** : ${appSettings?.support_phone || '+243 842 578 529'}\n- 💬 **WhatsApp direct** : ${appSettings?.support_whatsapp || '+243 842 578 529'}\n- 🏢 **Adresse physique** : ${appSettings?.office_address || 'Boulevard du 30 Juin, Gombe, Kinshasa, RDC.'}\n\nLe support réagit 7j/7 entre 7h00 et 23h00.`,
+        content: `Notre centre de support et nos bureaux administratifs sont basés à Kinshasa, RDC :\n\n- **E-mail** : ${appSettings?.support_email || 'support@dashmeals-rdc.com'}\n- **Téléphone d'urgence** : ${appSettings?.support_phone || '+243 842 578 529'}\n- **WhatsApp direct** : ${appSettings?.support_whatsapp || '+243 842 578 529'}\n- **Adresse physique** : ${appSettings?.office_address || 'Boulevard du 30 Juin, Gombe, Kinshasa, RDC.'}\n\nLe support réagit 7j/7 entre 7h00 et 23h00.`,
         tags: ['contact', 'email', 'adresse', 'telephone']
       }
     ]
@@ -267,7 +267,7 @@ export const HelpCenter: React.FC<Props> = ({ user, onClose, appSettings }) => {
   const [aiMessages, setAiMessages] = useState<{ role: 'user' | 'ai'; text: string; time?: string }[]>([
     {
       role: 'ai',
-      text: "Bonjour ! 👋 Je suis l'assistant intelligent DashMeals RDC. Je réponds instantanément à toutes vos questions sur vos commandes, les paiements Mobile Money (M-Pesa / Orange / Airtel), les livraisons à Kinshasa / Lubumbashi / Goma, ou la gestion de votre compte.",
+      text: "Bonjour ! Je suis l'assistant intelligent DashMeals RDC. Je réponds instantanément à toutes vos questions sur vos commandes, les paiements Mobile Money (M-Pesa / Orange / Airtel), les livraisons à Kinshasa / Lubumbashi / Goma, ou la gestion de votre compte.",
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     }
   ]);
@@ -560,7 +560,7 @@ export const HelpCenter: React.FC<Props> = ({ user, onClose, appSettings }) => {
                     onClick={() => handleSendAiMessage(sug)}
                     className="text-xs font-semibold px-3 py-1.5 bg-white dark:bg-gray-700/80 hover:bg-orange-500 hover:text-white text-gray-700 dark:text-gray-200 border border-gray-200 dark:border-gray-600 rounded-full transition-all shadow-sm active:scale-95"
                   >
-                    💡 {sug}
+                    {sug}
                   </button>
                 ))}
               </div>

@@ -195,9 +195,9 @@ export const LocationPicker: React.FC<Props> = ({
     setMapCenter(LUBUMBASHI_COORDS);
     setManualLat(LUBUMBASHI_COORDS[0].toString());
     setManualLng(LUBUMBASHI_COORDS[1].toString());
-    setLocationStatus("📍 Lubumbashi sélectionné");
+    setLocationStatus("Lubumbashi sélectionné");
     onLocationSelect(lubumbashiLocation);
-    toast.success("📍 Lubumbashi sélectionné comme position");
+    toast.success("Lubumbashi sélectionné comme position");
     setError(null);
   };
 
@@ -209,18 +209,18 @@ export const LocationPicker: React.FC<Props> = ({
     setPosition(locationData);
     setMapCenter([lat, lng]);
     onLocationSelect(locationData);
-    setLocationStatus(`📍 Position définie : ${city || `${lat.toFixed(4)}, ${lng.toFixed(4)}`}`);
-    toast.success(`📍 Position définie : ${city || 'Position personnalisée'}`);
+    setLocationStatus(`Position définie : ${city || `${lat.toFixed(4)}, ${lng.toFixed(4)}`}`);
+    toast.success(`Position définie : ${city || 'Position personnalisée'}`);
   };
 
   // Fonction pour détecter la position GPS avec gestion d'erreur améliorée
   const locateUser = () => {
     setIsLocating(true);
     setError(null);
-    setLocationStatus('🔍 Activation du GPS...');
+    setLocationStatus('Activation du GPS...');
     
     if (!('geolocation' in navigator)) {
-      const errorMsg = "❌ GPS non supporté. Veuillez sélectionner manuellement sur la carte.";
+      const errorMsg = "GPS non supporté. Veuillez sélectionner manuellement sur la carte.";
       setError(errorMsg);
       setLocationStatus(errorMsg);
       toast.error(errorMsg);
@@ -241,9 +241,9 @@ export const LocationPicker: React.FC<Props> = ({
           if (pos && pos.coords) {
             const { latitude, longitude, accuracy } = pos.coords;
             
-            console.log("📍 Position GPS détectée:", latitude, longitude);
+            console.log("Position GPS détectée:", latitude, longitude);
             await applyPosition(latitude, longitude);
-            setLocationStatus(`✅ Position GPS déterminée (Précision: ${Math.round(accuracy)}m)`);
+            setLocationStatus(`Position GPS déterminée (Précision: ${Math.round(accuracy)}m)`);
             setIsLocating(false);
           } else {
             throw new Error("Invalid position object");
@@ -253,16 +253,16 @@ export const LocationPicker: React.FC<Props> = ({
           let errorMessage = "";
           switch (err.code) {
             case err.PERMISSION_DENIED:
-              errorMessage = "❌ Permission GPS refusée. Activez la localisation dans vos paramètres.";
+              errorMessage = "Permission GPS refusée. Activez la localisation dans vos paramètres.";
               break;
             case err.POSITION_UNAVAILABLE:
-              errorMessage = "❌ Signal GPS indisponible. Positionnez-vous près d'une fenêtre.";
+              errorMessage = "Signal GPS indisponible. Positionnez-vous près d'une fenêtre.";
               break;
             case err.TIMEOUT:
-              errorMessage = "⏱️ Délai GPS dépassé. Veuillez réessayer ou entrer vos coordonnées.";
+              errorMessage = "Délai GPS dépassé. Veuillez réessayer ou entrer vos coordonnées.";
               break;
             default:
-              errorMessage = `❌ Erreur GPS: ${err.message || "cause inconnue"}`;
+              errorMessage = `Erreur GPS: ${err.message || "cause inconnue"}`;
           }
           console.error("Geo error:", errorMessage);
           setError(errorMessage);
@@ -274,7 +274,7 @@ export const LocationPicker: React.FC<Props> = ({
       );
     } catch (syncError: any) {
       console.error("Location picker synchronous GPS error caught:", syncError);
-      const errorMessage = "❌ Échec de l'accès au service de position.";
+      const errorMessage = "Échec de l'accès au service de position.";
       setError(errorMessage);
       setLocationStatus(errorMessage);
       toast.error(errorMessage);
@@ -312,7 +312,7 @@ export const LocationPicker: React.FC<Props> = ({
         };
         setPosition(customLocation);
         onLocationSelect(customLocation);
-        setLocationStatus(`📍 Carte centrée sur ${cityName}`);
+        setLocationStatus(`Carte centrée sur ${cityName}`);
         toast.info(`Affichage de ${cityName}`);
       }
     }
@@ -341,7 +341,7 @@ export const LocationPicker: React.FC<Props> = ({
           className="flex items-center gap-2 bg-orange-500 text-white px-4 py-2 rounded-lg font-bold hover:bg-orange-600 transition-colors shadow-md"
         >
           <MapPin size={18} />
-          📍 Lubumbashi
+          Lubumbashi
         </button>
         
         {/* Bouton GPS - visible uniquement sur mobile */}
@@ -357,7 +357,7 @@ export const LocationPicker: React.FC<Props> = ({
           ) : (
             <Navigation size={18} />
           )}
-          {isLocating ? 'Recherche...' : '📍 GPS'}
+          {isLocating ? 'Recherche...' : 'GPS'}
         </button>
 
         {/* Sélecteur rapide de villes */}
@@ -366,7 +366,7 @@ export const LocationPicker: React.FC<Props> = ({
           value=""
           className="px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 dark:text-white"
         >
-          <option value="">🏙️ Autres villes...</option>
+          <option value="">Autres villes...</option>
           {Object.keys(CITY_COORDINATES).map(city => (
             <option key={city} value={city}>{city}</option>
           ))}
@@ -464,7 +464,7 @@ export const LocationPicker: React.FC<Props> = ({
         {position?.city === 'Lubumbashi' && (
           <div className="absolute top-2 left-2 z-[400] bg-orange-500 text-white text-xs px-2 py-1 rounded-full shadow-md flex items-center gap-1">
             <MapPin size={12} />
-            🇨🇩 Lubumbashi
+            Lubumbashi
           </div>
         )}
       </div>
@@ -489,13 +489,12 @@ export const LocationPicker: React.FC<Props> = ({
                   : 'text-green-800 dark:text-green-300'
               }`}>
                 {position.city || 'Position sélectionnée'}
-                {position.city === 'Lubumbashi' && ' 🇨🇩'}
               </p>
               <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
                 {position.address || `${position.lat.toFixed(6)}, ${position.lng.toFixed(6)}`}
               </p>
               <p className="text-xs text-gray-500 dark:text-gray-500 mt-2 font-mono">
-                📍 {position.lat.toFixed(6)}, {position.lng.toFixed(6)}
+                {position.lat.toFixed(6)}, {position.lng.toFixed(6)}
               </p>
             </div>
           </div>
@@ -514,7 +513,7 @@ export const LocationPicker: React.FC<Props> = ({
                 onClick={selectLubumbashi}
                 className="mt-2 text-xs text-red-600 dark:text-red-400 underline hover:no-underline"
               >
-                📍 Sélectionner Lubumbashi
+                Sélectionner Lubumbashi
               </button>
             </div>
           </div>
@@ -523,9 +522,9 @@ export const LocationPicker: React.FC<Props> = ({
 
       {/* Instructions */}
       <div className="bg-gray-50 dark:bg-gray-800 p-3 rounded-lg text-xs text-gray-500 dark:text-gray-400 text-center">
-        💡 <strong>Lubumbashi</strong> est sélectionné par défaut.<br />
-        📱 Sur mobile, utilisez le bouton <strong>GPS</strong> pour votre position réelle.<br />
-        🖱️ Sur ordinateur, cliquez directement sur la carte pour sélectionner un point.
+        <strong>Lubumbashi</strong> est sélectionné par défaut.<br />
+        Sur mobile, utilisez le bouton <strong>GPS</strong> pour votre position réelle.<br />
+        Sur ordinateur, cliquez directement sur la carte pour sélectionner un point.
       </div>
     </div>
   );
